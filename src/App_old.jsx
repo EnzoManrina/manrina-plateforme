@@ -1,4 +1,7 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
+
+// === API CONFIG ===
+const API_URL = '/api.php'
 
 // === EMOJIS DISPONIBLES ===
 const EMOJIS = ['💵', '🏦', '📦', '🚗', '💸', '🛒', '🍽️', '⛽', '📱', '💼', '🎁', '🔧', '📝', '💳', '🏠', '⚡', '💊', '🎉', '✈️', '🚌', '☕', '🍕', '👕', '📚', '🎬', '💇', '🧹', '🌿', '🥭', '➕', '➖']
@@ -6,36 +9,12 @@ const EMOJIS = ['💵', '🏦', '📦', '🚗', '💸', '🛒', '🍽️', '⛽'
 function App() {
   // === ÉTATS ===
   const [activeTab, setActiveTab] = useState('mouvements')
+  const [loading, setLoading] = useState(true)
+  const [saving, setSaving] = useState(false)
   
-  // Catégories personnalisables
-  const [categories, setCategories] = useState({
-    entree: [
-      { id: 'ventes', label: 'Ventes espèces', icon: '💵' },
-      { id: 'fond', label: 'Fond de caisse', icon: '🏦' },
-      { id: 'remb_recu', label: 'Remboursement reçu', icon: '↩️' },
-      { id: 'autre_entree', label: 'Autre entrée', icon: '➕' },
-    ],
-    sortie: [
-      { id: 'fournitures', label: 'Achat fournitures', icon: '📦' },
-      { id: 'transport', label: 'Frais transport', icon: '🚗' },
-      { id: 'remb_client', label: 'Remboursement client', icon: '↪️' },
-      { id: 'retrait', label: 'Retrait caisse', icon: '💸' },
-      { id: 'autre_sortie', label: 'Autre sortie', icon: '➖' },
-    ]
-  })
-
-  const [transactions, setTransactions] = useState([
-    { id: 1, type: 'entree', category: 'fond', amount: 500, reason: 'Ouverture caisse', user: 'Enzo', date: '2024-12-22', note: '' },
-    { id: 2, type: 'sortie', category: 'fournitures', amount: 45.50, reason: 'Sacs papier', user: 'Alain', date: '2024-12-22', note: 'Fournisseur Carton+' },
-  ])
-  
-  const [team, setTeam] = useState([
-    { id: 1, name: 'Enzo' },
-    { id: 2, name: 'Alain' },
-    { id: 3, name: 'Guy' },
-  ])
-  
-  const [soldeCaisse, setSoldeCaisse] = useState(0)
+  const [categories, setCategories] = useState({ entree: [], sortie: [] })
+  const [transactions, setTransactions] = useState([])
+  const [team, setTeam] = useState([])
   
   // Modals
   const [showModal, setShowModal] = useState(false)
@@ -57,6 +36,78 @@ function App() {
   const [filterPeriod, setFilterPeriod] = useState('tout')
   const [filterUser, setFilterUser] = useState('tous')
   const [searchQuery, setSearchQuery] = useState('')
+
+  // === CHARGEMENT INITIAL ===
+  useEffect(() => {
+    loadData()
+  }, [])
+
+  const loadData = async () => {
+    setLoading(true)
+    try {
+      const [teamRes, catRes, transRes] = await Promise.all([
+        fetch(`${API_URL}?table=Equipe`),
+        fetch(`${API_URL}?table=Categories`),
+        fetch(`${API_URL}?table=Transactions&sort_field=Date&sort_direction=desc`)
+      ])
+      
+      const teamData = await teamRes.json()
+      const catData = await catRes.json()
+      const transData = await transRes.json()
+      
+      // Équipe
+      if (teamData.records) {
+        setTeam(teamData.records.map(r => ({
+          id: r.id,
+          name: r.fields.Nom || ''
+        })))
+      }
+      
+      // Catégories
+      if (catData.records) {
+        const cats = { entree: [], sortie: [] }
+        catData.records.forEach(r => {
+          const type = r.fields.Type || 'sortie'
+          cats[type].push({
+            id: r.id,
+            label: r.fields.Label || '',
+            icon: r.fields.Icon || '📦'
+          })
+        })
+        setCategories(cats)
+      }
+      
+      // Transactions
+      if (transData.records) {
+        setTransactions(transData.records.map(r => ({
+          id: r.id,
+          type: r.fields.Type || 'sortie',
+          category: r.fields.Categorie?.[0] || '',
+          categoryName: '',
+          amount: r.fields.Montant || 0,
+          reason: r.fields.Motif || '',
+          user: r.fields.Utilisateur?.[0] || '',
+          userName: '',
+          date: r.fields.Date || '',
+          note: r.fields.Note || ''
+        })))
+      }
+    } catch (err) {
+      console.error('Erreur chargement:', err)
+    }
+    setLoading(false)
+  }
+
+  // === HELPERS ===
+  const getUserName = (userId) => {
+    const user = team.find(u => u.id === userId)
+    return user?.name || ''
+  }
+
+  const getCategoryInfo = (catId, type) => {
+    const cat = categories[type]?.find(c => c.id === catId)
+    return cat || { label: '', icon: '💰' }
+  }
 
   // === CALCULS ===
   const filterTransactions = () => {
@@ -83,7 +134,7 @@ function App() {
       filtered = filtered.filter(t => 
         t.reason.toLowerCase().includes(q) || 
         t.note?.toLowerCase().includes(q) ||
-        t.user.toLowerCase().includes(q)
+        getUserName(t.user).toLowerCase().includes(q)
       )
     }
     
@@ -94,7 +145,7 @@ function App() {
   
   const totalEntrees = filteredTransactions.filter(t => t.type === 'entree').reduce((sum, t) => sum + t.amount, 0)
   const totalSorties = filteredTransactions.filter(t => t.type === 'sortie').reduce((sum, t) => sum + t.amount, 0)
-  const soldeActuel = soldeCaisse + transactions.filter(t => t.type === 'entree').reduce((sum, t) => sum + t.amount, 0) - transactions.filter(t => t.type === 'sortie').reduce((sum, t) => sum + t.amount, 0)
+  const soldeActuel = transactions.filter(t => t.type === 'entree').reduce((sum, t) => sum + t.amount, 0) - transactions.filter(t => t.type === 'sortie').reduce((sum, t) => sum + t.amount, 0)
 
   const getStatsByCategory = (type) => {
     const cats = categories[type]
@@ -107,10 +158,11 @@ function App() {
 
   const getStatsByUser = () => {
     return team.map(u => ({
+      id: u.id,
       name: u.name,
-      entrees: filteredTransactions.filter(t => t.user === u.name && t.type === 'entree').reduce((sum, t) => sum + t.amount, 0),
-      sorties: filteredTransactions.filter(t => t.user === u.name && t.type === 'sortie').reduce((sum, t) => sum + t.amount, 0),
-      count: filteredTransactions.filter(t => t.user === u.name).length
+      entrees: filteredTransactions.filter(t => t.user === u.id && t.type === 'entree').reduce((sum, t) => sum + t.amount, 0),
+      sorties: filteredTransactions.filter(t => t.user === u.id && t.type === 'sortie').reduce((sum, t) => sum + t.amount, 0),
+      count: filteredTransactions.filter(t => t.user === u.id).length
     })).filter(u => u.count > 0)
   }
 
@@ -136,76 +188,105 @@ function App() {
     setShowModal(true)
   }
 
-  const handleSubmit = (e) => {
+  const handleSubmit = async (e) => {
     e.preventDefault()
     if (!formData.amount || !formData.reason || !formData.user || !formData.category) return
     
-    if (editingTransaction) {
-      // Modifier
-      setTransactions(transactions.map(t => 
-        t.id === editingTransaction.id 
-          ? {
-              ...t,
-              type: newType,
-              category: formData.category,
-              amount: parseFloat(formData.amount),
-              reason: formData.reason,
-              user: formData.user,
-              date: formData.date,
-              note: formData.note
-            }
-          : t
-      ))
-    } else {
-      // Créer
-      const newTransaction = {
-        id: Date.now(),
-        type: newType,
-        category: formData.category,
-        amount: parseFloat(formData.amount),
-        reason: formData.reason,
-        user: formData.user,
-        date: formData.date || new Date().toISOString().split('T')[0],
-        note: formData.note
-      }
-      setTransactions([newTransaction, ...transactions])
+    setSaving(true)
+    
+    const fields = {
+      Motif: formData.reason,
+      Montant: parseFloat(formData.amount),
+      Type: newType,
+      Categorie: [formData.category],
+      Utilisateur: [formData.user],
+      Date: formData.date,
+      Note: formData.note
     }
     
-    setFormData({ amount: '', reason: '', user: '', category: '', note: '', date: '' })
-    setEditingTransaction(null)
-    setShowModal(false)
+    try {
+      if (editingTransaction) {
+        await fetch(`${API_URL}?table=Transactions&id=${editingTransaction.id}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ fields })
+        })
+      } else {
+        await fetch(`${API_URL}?table=Transactions`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ fields })
+        })
+      }
+      
+      await loadData()
+      setFormData({ amount: '', reason: '', user: '', category: '', note: '', date: '' })
+      setEditingTransaction(null)
+      setShowModal(false)
+    } catch (err) {
+      console.error('Erreur sauvegarde:', err)
+      alert('Erreur lors de la sauvegarde')
+    }
+    
+    setSaving(false)
   }
 
-  const deleteTransaction = (id) => {
-    if (confirm('Supprimer cette opération ?')) {
-      setTransactions(transactions.filter(t => t.id !== id))
+  const deleteTransaction = async (id) => {
+    if (!confirm('Supprimer cette opération ?')) return
+    
+    try {
+      await fetch(`${API_URL}?table=Transactions&id=${id}`, { method: 'DELETE' })
+      await loadData()
+    } catch (err) {
+      console.error('Erreur suppression:', err)
     }
   }
 
   // === ACTIONS UTILISATEURS ===
-  const handleUserSubmit = (e) => {
+  const handleUserSubmit = async (e) => {
     e.preventDefault()
     if (!newUserName.trim()) return
     
-    if (editingUser) {
-      setTeam(team.map(u => u.id === editingUser.id ? { ...u, name: newUserName } : u))
-      setTransactions(transactions.map(t => t.user === editingUser.name ? { ...t, user: newUserName } : t))
-    } else {
-      setTeam([...team, { id: Date.now(), name: newUserName }])
+    setSaving(true)
+    
+    try {
+      if (editingUser) {
+        await fetch(`${API_URL}?table=Equipe&id=${editingUser.id}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ fields: { Nom: newUserName } })
+        })
+      } else {
+        await fetch(`${API_URL}?table=Equipe`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ fields: { Nom: newUserName } })
+        })
+      }
+      
+      await loadData()
+      setNewUserName('')
+      setEditingUser(null)
+      setShowUserModal(false)
+    } catch (err) {
+      console.error('Erreur:', err)
     }
     
-    setNewUserName('')
-    setEditingUser(null)
-    setShowUserModal(false)
+    setSaving(false)
   }
 
-  const deleteUser = (user) => {
-    if (transactions.some(t => t.user === user.name)) {
+  const deleteUser = async (user) => {
+    if (transactions.some(t => t.user === user.id)) {
       alert('Impossible : cet utilisateur a des opérations enregistrées')
       return
     }
-    if (confirm(`Supprimer ${user.name} ?`)) {
-      setTeam(team.filter(u => u.id !== user.id))
+    if (!confirm(`Supprimer ${user.name} ?`)) return
+    
+    try {
+      await fetch(`${API_URL}?table=Equipe&id=${user.id}`, { method: 'DELETE' })
+      await loadData()
+    } catch (err) {
+      console.error('Erreur:', err)
     }
   }
 
@@ -222,60 +303,91 @@ function App() {
     setShowCategoryModal(true)
   }
 
-  const handleCategorySubmit = (e) => {
+  const handleCategorySubmit = async (e) => {
     e.preventDefault()
     if (!categoryForm.label.trim()) return
     
-    const type = categoryForm.type
+    setSaving(true)
     
-    if (editingCategory) {
-      // Modifier
-      setCategories({
-        ...categories,
-        [type]: categories[type].map(c => 
-          c.id === editingCategory.id 
-            ? { ...c, label: categoryForm.label, icon: categoryForm.icon }
-            : c
-        )
-      })
-    } else {
-      // Créer
-      const newCat = {
-        id: `cat_${Date.now()}`,
-        label: categoryForm.label,
-        icon: categoryForm.icon
-      }
-      setCategories({
-        ...categories,
-        [type]: [...categories[type], newCat]
-      })
+    const fields = {
+      Label: categoryForm.label,
+      Icon: categoryForm.icon,
+      Type: categoryForm.type
     }
     
-    setCategoryForm({ type: 'sortie', label: '', icon: '📦' })
-    setEditingCategory(null)
-    setShowCategoryModal(false)
+    try {
+      if (editingCategory) {
+        await fetch(`${API_URL}?table=Categories&id=${editingCategory.id}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ fields })
+        })
+      } else {
+        await fetch(`${API_URL}?table=Categories`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ fields })
+        })
+      }
+      
+      await loadData()
+      setCategoryForm({ type: 'sortie', label: '', icon: '📦' })
+      setEditingCategory(null)
+      setShowCategoryModal(false)
+    } catch (err) {
+      console.error('Erreur:', err)
+    }
+    
+    setSaving(false)
   }
 
-  const deleteCategory = (type, cat) => {
+  const deleteCategory = async (type, cat) => {
     if (transactions.some(t => t.type === type && t.category === cat.id)) {
       alert('Impossible : cette catégorie est utilisée par des opérations')
       return
     }
-    if (confirm(`Supprimer la catégorie "${cat.label}" ?`)) {
-      setCategories({
-        ...categories,
-        [type]: categories[type].filter(c => c.id !== cat.id)
-      })
+    if (!confirm(`Supprimer la catégorie "${cat.label}" ?`)) return
+    
+    try {
+      await fetch(`${API_URL}?table=Categories&id=${cat.id}`, { method: 'DELETE' })
+      await loadData()
+    } catch (err) {
+      console.error('Erreur:', err)
     }
   }
 
   // === RESET ===
-  const handleReset = () => {
+  const handleReset = async () => {
     if (resetConfirm !== 'REINITIALISER') return
-    setTransactions([])
-    setSoldeCaisse(0)
-    setResetConfirm('')
-    setShowResetModal(false)
+    
+    setSaving(true)
+    
+    try {
+      // Supprimer toutes les transactions une par une
+      for (const t of transactions) {
+        await fetch(`${API_URL}?table=Transactions&id=${t.id}`, { method: 'DELETE' })
+      }
+      
+      await loadData()
+      setResetConfirm('')
+      setShowResetModal(false)
+    } catch (err) {
+      console.error('Erreur:', err)
+    }
+    
+    setSaving(false)
+  }
+
+  // === LOADING SCREEN ===
+  if (loading) {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-emerald-500 via-teal-500 to-cyan-600 flex items-center justify-center">
+        <div className="text-center text-white">
+          <div className="text-4xl mb-4">🥭</div>
+          <p className="text-lg font-medium">Chargement...</p>
+        </div>
+      </div>
+    )
   }
 
   // === RENDU ===
@@ -358,7 +470,7 @@ function App() {
                 >
                   <option value="tous" className="text-gray-800">Tous</option>
                   {team.map(u => (
-                    <option key={u.id} value={u.name} className="text-gray-800">{u.name}</option>
+                    <option key={u.id} value={u.id} className="text-gray-800">{u.name}</option>
                   ))}
                 </select>
               </div>
@@ -383,53 +495,54 @@ function App() {
                   <p className="text-white/70">Aucune opération</p>
                 </div>
               ) : (
-                filteredTransactions.map(t => (
-                  <div key={t.id} className="bg-white rounded-2xl p-4 shadow-lg">
-                    <div className="flex justify-between items-start">
-                      <div 
-                        className="flex items-start gap-3 flex-1 cursor-pointer"
-                        onClick={() => openEditTransaction(t)}
-                      >
-                        <div className={`w-10 h-10 rounded-xl flex items-center justify-center text-lg ${
-                          t.type === 'entree' ? 'bg-emerald-100' : 'bg-red-100'
-                        }`}>
-                          {categories[t.type]?.find(c => c.id === t.category)?.icon || '💰'}
+                filteredTransactions.map(t => {
+                  const catInfo = getCategoryInfo(t.category, t.type)
+                  return (
+                    <div key={t.id} className="bg-white rounded-2xl p-4 shadow-lg">
+                      <div className="flex justify-between items-start">
+                        <div 
+                          className="flex items-start gap-3 flex-1 cursor-pointer"
+                          onClick={() => openEditTransaction(t)}
+                        >
+                          <div className={`w-10 h-10 rounded-xl flex items-center justify-center text-lg ${
+                            t.type === 'entree' ? 'bg-emerald-100' : 'bg-red-100'
+                          }`}>
+                            {catInfo.icon}
+                          </div>
+                          <div className="flex-1 min-w-0">
+                            <p className="font-medium text-gray-800 truncate">{t.reason}</p>
+                            <p className="text-xs text-gray-400">{catInfo.label}</p>
+                            <p className="text-xs text-gray-400 mt-1">
+                              {getUserName(t.user)} • {t.date}
+                            </p>
+                            {t.note && (
+                              <p className="text-xs text-gray-500 mt-1 italic">📝 {t.note}</p>
+                            )}
+                          </div>
                         </div>
-                        <div className="flex-1 min-w-0">
-                          <p className="font-medium text-gray-800 truncate">{t.reason}</p>
-                          <p className="text-xs text-gray-400">
-                            {categories[t.type]?.find(c => c.id === t.category)?.label}
+                        <div className="flex flex-col items-end gap-2">
+                          <p className={`font-bold ${t.type === 'entree' ? 'text-emerald-600' : 'text-red-500'}`}>
+                            {t.type === 'entree' ? '+' : '-'}{t.amount.toFixed(2)} €
                           </p>
-                          <p className="text-xs text-gray-400 mt-1">
-                            {t.user} • {t.date}
-                          </p>
-                          {t.note && (
-                            <p className="text-xs text-gray-500 mt-1 italic">📝 {t.note}</p>
-                          )}
-                        </div>
-                      </div>
-                      <div className="flex flex-col items-end gap-2">
-                        <p className={`font-bold ${t.type === 'entree' ? 'text-emerald-600' : 'text-red-500'}`}>
-                          {t.type === 'entree' ? '+' : '-'}{t.amount.toFixed(2)} €
-                        </p>
-                        <div className="flex gap-1">
-                          <button 
-                            onClick={() => openEditTransaction(t)}
-                            className="text-xs text-gray-400 hover:text-teal-500 p-1"
-                          >
-                            ✏️
-                          </button>
-                          <button 
-                            onClick={() => deleteTransaction(t.id)}
-                            className="text-xs text-gray-400 hover:text-red-500 p-1"
-                          >
-                            🗑️
-                          </button>
+                          <div className="flex gap-1">
+                            <button 
+                              onClick={() => openEditTransaction(t)}
+                              className="text-xs text-gray-400 hover:text-teal-500 p-1"
+                            >
+                              ✏️
+                            </button>
+                            <button 
+                              onClick={() => deleteTransaction(t.id)}
+                              className="text-xs text-gray-400 hover:text-red-500 p-1"
+                            >
+                              🗑️
+                            </button>
+                          </div>
                         </div>
                       </div>
                     </div>
-                  </div>
-                ))
+                  )
+                })
               )}
             </div>
           </div>
@@ -477,7 +590,7 @@ function App() {
               ) : (
                 <div className="space-y-3">
                   {getStatsByUser().map(u => (
-                    <div key={u.name} className="flex justify-between items-center py-2 border-b border-gray-100 last:border-0">
+                    <div key={u.id} className="flex justify-between items-center py-2 border-b border-gray-100 last:border-0">
                       <div>
                         <p className="font-medium">{u.name}</p>
                         <p className="text-xs text-gray-400">{u.count} opération(s)</p>
@@ -515,32 +628,36 @@ function App() {
                 </button>
               </div>
               
-              <div className="space-y-2">
-                {team.map(u => (
-                  <div key={u.id} className="flex justify-between items-center p-3 bg-gray-50 rounded-xl">
-                    <div className="flex items-center gap-3">
-                      <div className="w-10 h-10 bg-gradient-to-br from-emerald-400 to-teal-500 rounded-xl flex items-center justify-center text-white font-bold">
-                        {u.name[0].toUpperCase()}
+              {team.length === 0 ? (
+                <p className="text-gray-400 text-sm text-center py-4">Aucun membre</p>
+              ) : (
+                <div className="space-y-2">
+                  {team.map(u => (
+                    <div key={u.id} className="flex justify-between items-center p-3 bg-gray-50 rounded-xl">
+                      <div className="flex items-center gap-3">
+                        <div className="w-10 h-10 bg-gradient-to-br from-emerald-400 to-teal-500 rounded-xl flex items-center justify-center text-white font-bold">
+                          {u.name[0]?.toUpperCase() || '?'}
+                        </div>
+                        <span className="font-medium">{u.name}</span>
                       </div>
-                      <span className="font-medium">{u.name}</span>
+                      <div className="flex gap-2">
+                        <button
+                          onClick={() => { setEditingUser(u); setNewUserName(u.name); setShowUserModal(true); }}
+                          className="p-2 text-gray-400 hover:text-teal-600"
+                        >
+                          ✏️
+                        </button>
+                        <button
+                          onClick={() => deleteUser(u)}
+                          className="p-2 text-gray-400 hover:text-red-500"
+                        >
+                          🗑️
+                        </button>
+                      </div>
                     </div>
-                    <div className="flex gap-2">
-                      <button
-                        onClick={() => { setEditingUser(u); setNewUserName(u.name); setShowUserModal(true); }}
-                        className="p-2 text-gray-400 hover:text-teal-600"
-                      >
-                        ✏️
-                      </button>
-                      <button
-                        onClick={() => deleteUser(u)}
-                        className="p-2 text-gray-400 hover:text-red-500"
-                      >
-                        🗑️
-                      </button>
-                    </div>
-                  </div>
-                ))}
-              </div>
+                  ))}
+                </div>
+              )}
             </div>
           </div>
         )}
@@ -560,30 +677,34 @@ function App() {
                 </button>
               </div>
               
-              <div className="space-y-2">
-                {categories.entree.map(cat => (
-                  <div key={cat.id} className="flex justify-between items-center p-3 bg-emerald-50 rounded-xl">
-                    <div className="flex items-center gap-3">
-                      <span className="text-xl">{cat.icon}</span>
-                      <span className="font-medium text-gray-700">{cat.label}</span>
+              {categories.entree.length === 0 ? (
+                <p className="text-gray-400 text-sm text-center py-4">Aucune catégorie</p>
+              ) : (
+                <div className="space-y-2">
+                  {categories.entree.map(cat => (
+                    <div key={cat.id} className="flex justify-between items-center p-3 bg-emerald-50 rounded-xl">
+                      <div className="flex items-center gap-3">
+                        <span className="text-xl">{cat.icon}</span>
+                        <span className="font-medium text-gray-700">{cat.label}</span>
+                      </div>
+                      <div className="flex gap-2">
+                        <button
+                          onClick={() => openEditCategory('entree', cat)}
+                          className="p-2 text-gray-400 hover:text-teal-600"
+                        >
+                          ✏️
+                        </button>
+                        <button
+                          onClick={() => deleteCategory('entree', cat)}
+                          className="p-2 text-gray-400 hover:text-red-500"
+                        >
+                          🗑️
+                        </button>
+                      </div>
                     </div>
-                    <div className="flex gap-2">
-                      <button
-                        onClick={() => openEditCategory('entree', cat)}
-                        className="p-2 text-gray-400 hover:text-teal-600"
-                      >
-                        ✏️
-                      </button>
-                      <button
-                        onClick={() => deleteCategory('entree', cat)}
-                        className="p-2 text-gray-400 hover:text-red-500"
-                      >
-                        🗑️
-                      </button>
-                    </div>
-                  </div>
-                ))}
-              </div>
+                  ))}
+                </div>
+              )}
             </div>
 
             {/* Catégories Sorties */}
@@ -598,30 +719,34 @@ function App() {
                 </button>
               </div>
               
-              <div className="space-y-2">
-                {categories.sortie.map(cat => (
-                  <div key={cat.id} className="flex justify-between items-center p-3 bg-red-50 rounded-xl">
-                    <div className="flex items-center gap-3">
-                      <span className="text-xl">{cat.icon}</span>
-                      <span className="font-medium text-gray-700">{cat.label}</span>
+              {categories.sortie.length === 0 ? (
+                <p className="text-gray-400 text-sm text-center py-4">Aucune catégorie</p>
+              ) : (
+                <div className="space-y-2">
+                  {categories.sortie.map(cat => (
+                    <div key={cat.id} className="flex justify-between items-center p-3 bg-red-50 rounded-xl">
+                      <div className="flex items-center gap-3">
+                        <span className="text-xl">{cat.icon}</span>
+                        <span className="font-medium text-gray-700">{cat.label}</span>
+                      </div>
+                      <div className="flex gap-2">
+                        <button
+                          onClick={() => openEditCategory('sortie', cat)}
+                          className="p-2 text-gray-400 hover:text-teal-600"
+                        >
+                          ✏️
+                        </button>
+                        <button
+                          onClick={() => deleteCategory('sortie', cat)}
+                          className="p-2 text-gray-400 hover:text-red-500"
+                        >
+                          🗑️
+                        </button>
+                      </div>
                     </div>
-                    <div className="flex gap-2">
-                      <button
-                        onClick={() => openEditCategory('sortie', cat)}
-                        className="p-2 text-gray-400 hover:text-teal-600"
-                      >
-                        ✏️
-                      </button>
-                      <button
-                        onClick={() => deleteCategory('sortie', cat)}
-                        className="p-2 text-gray-400 hover:text-red-500"
-                      >
-                        🗑️
-                      </button>
-                    </div>
-                  </div>
-                ))}
-              </div>
+                  ))}
+                </div>
+              )}
             </div>
           </div>
         )}
@@ -676,22 +801,28 @@ function App() {
               {/* Catégorie */}
               <div>
                 <label className="text-sm text-gray-500 mb-2 block">Catégorie</label>
-                <div className="grid grid-cols-2 gap-2">
-                  {categories[newType].map(cat => (
-                    <button
-                      key={cat.id}
-                      type="button"
-                      onClick={() => setFormData({...formData, category: cat.id})}
-                      className={`p-3 rounded-xl text-left text-sm transition-all ${
-                        formData.category === cat.id 
-                          ? newType === 'entree' ? 'bg-emerald-100 text-emerald-700 ring-2 ring-emerald-500' : 'bg-red-100 text-red-700 ring-2 ring-red-500'
-                          : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
-                      }`}
-                    >
-                      {cat.icon} {cat.label}
-                    </button>
-                  ))}
-                </div>
+                {categories[newType].length === 0 ? (
+                  <p className="text-gray-400 text-sm p-4 bg-gray-100 rounded-xl">
+                    Aucune catégorie. <button type="button" onClick={() => { setShowModal(false); setActiveTab('categories'); }} className="text-teal-600 underline">Créer une catégorie</button>
+                  </p>
+                ) : (
+                  <div className="grid grid-cols-2 gap-2">
+                    {categories[newType].map(cat => (
+                      <button
+                        key={cat.id}
+                        type="button"
+                        onClick={() => setFormData({...formData, category: cat.id})}
+                        className={`p-3 rounded-xl text-left text-sm transition-all ${
+                          formData.category === cat.id 
+                            ? newType === 'entree' ? 'bg-emerald-100 text-emerald-700 ring-2 ring-emerald-500' : 'bg-red-100 text-red-700 ring-2 ring-red-500'
+                            : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                        }`}
+                      >
+                        {cat.icon} {cat.label}
+                      </button>
+                    ))}
+                  </div>
+                )}
               </div>
 
               {/* Montant */}
@@ -723,17 +854,23 @@ function App() {
               {/* Utilisateur */}
               <div>
                 <label className="text-sm text-gray-500 mb-2 block">Opéré par</label>
-                <select
-                  value={formData.user}
-                  onChange={(e) => setFormData({...formData, user: e.target.value})}
-                  className="w-full p-4 bg-gray-100 rounded-xl font-medium"
-                  required
-                >
-                  <option value="">Sélectionner...</option>
-                  {team.map(u => (
-                    <option key={u.id} value={u.name}>{u.name}</option>
-                  ))}
-                </select>
+                {team.length === 0 ? (
+                  <p className="text-gray-400 text-sm p-4 bg-gray-100 rounded-xl">
+                    Aucun membre. <button type="button" onClick={() => { setShowModal(false); setActiveTab('equipe'); }} className="text-teal-600 underline">Ajouter un membre</button>
+                  </p>
+                ) : (
+                  <select
+                    value={formData.user}
+                    onChange={(e) => setFormData({...formData, user: e.target.value})}
+                    className="w-full p-4 bg-gray-100 rounded-xl font-medium"
+                    required
+                  >
+                    <option value="">Sélectionner...</option>
+                    {team.map(u => (
+                      <option key={u.id} value={u.id}>{u.name}</option>
+                    ))}
+                  </select>
+                )}
               </div>
 
               {/* Motif */}
@@ -764,14 +901,14 @@ function App() {
               {/* Valider */}
               <button
                 type="submit"
-                disabled={!formData.category}
+                disabled={!formData.category || saving}
                 className={`w-full py-4 rounded-xl font-bold text-white transition-all ${
-                  !formData.category 
+                  !formData.category || saving
                     ? 'bg-gray-300 cursor-not-allowed' 
                     : newType === 'entree' ? 'bg-emerald-600 hover:bg-emerald-700' : 'bg-red-600 hover:bg-red-700'
                 }`}
               >
-                {editingTransaction ? 'Enregistrer les modifications' : 'Valider l\'opération'}
+                {saving ? 'Enregistrement...' : editingTransaction ? 'Enregistrer les modifications' : 'Valider l\'opération'}
               </button>
             </form>
           </div>
@@ -807,9 +944,10 @@ function App() {
                 </button>
                 <button
                   type="submit"
+                  disabled={saving}
                   className="flex-1 py-3 bg-teal-600 text-white rounded-xl font-medium"
                 >
-                  {editingUser ? 'Modifier' : 'Ajouter'}
+                  {saving ? '...' : editingUser ? 'Modifier' : 'Ajouter'}
                 </button>
               </div>
             </form>
@@ -877,11 +1015,12 @@ function App() {
                 </button>
                 <button
                   type="submit"
+                  disabled={saving}
                   className={`flex-1 py-3 text-white rounded-xl font-medium ${
                     categoryForm.type === 'entree' ? 'bg-emerald-600' : 'bg-red-600'
                   }`}
                 >
-                  {editingCategory ? 'Modifier' : 'Créer'}
+                  {saving ? '...' : editingCategory ? 'Modifier' : 'Créer'}
                 </button>
               </div>
             </form>
@@ -918,14 +1057,14 @@ function App() {
               </button>
               <button
                 onClick={handleReset}
-                disabled={resetConfirm !== 'REINITIALISER'}
+                disabled={resetConfirm !== 'REINITIALISER' || saving}
                 className={`flex-1 py-3 rounded-xl font-medium ${
-                  resetConfirm === 'REINITIALISER' 
+                  resetConfirm === 'REINITIALISER' && !saving
                     ? 'bg-red-600 text-white' 
                     : 'bg-gray-200 text-gray-400 cursor-not-allowed'
                 }`}
               >
-                Confirmer
+                {saving ? '...' : 'Confirmer'}
               </button>
             </div>
           </div>
