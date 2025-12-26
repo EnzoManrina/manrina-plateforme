@@ -1,27 +1,29 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useMemo, useCallback } from 'react'
 
-// === API CONFIG ===
+// === CONFIGURATION ===
 const API_URL = '/api.php'
 
-// === EMOJIS DISPONIBLES ===
-const EMOJIS = ['💵', '🏦', '📦', '🚗', '💸', '🛒', '🍽️', '⛽', '📱', '💼', '🎁', '🔧', '📝', '💳', '🏠', '⚡', '💊', '🎉', '✈️', '🚌', '☕', '🍕', '👕', '📚', '🎬', '💇', '🧹', '🌿', '🥭', '➕', '➖', '🏪', '🚚', '🍳']
+// === CONSTANTES ===
+const EMOJIS = ['💵', '🏦', '📦', '🚗', '💸', '🛒', '🍽️', '⛽', '📱', '💼', '🎁', '🔧', '📝', '💳', '🏠', '⚡', '💊', '🎉', '✈️', '🚌', '☕', '🍕', '👕', '📚', '🎬', '💇', '🧹', '🌿', '🥭', '➕', '➖', '🏪', '🚚', '🍳', '💰', '🎯', '📊', '🔒']
 
-// === HELPERS FORMAT DATE ===
+const TABS = [
+  { id: 'mouvements', label: '📋 Opérations' },
+  { id: 'resume', label: '📊 Résumé' },
+  { id: 'equipe', label: '👥 Équipe' },
+  { id: 'parametres', label: '⚙️ Paramètres' },
+]
+
+// === HELPERS ===
 const formatDate = (dateString) => {
   if (!dateString) return ''
   const date = new Date(dateString)
-  const jour = date.getDate().toString().padStart(2, '0')
-  const mois = (date.getMonth() + 1).toString().padStart(2, '0')
-  const annee = date.getFullYear()
-  return `${jour}/${mois}/${annee}`
+  return `${date.getDate().toString().padStart(2, '0')}/${(date.getMonth() + 1).toString().padStart(2, '0')}/${date.getFullYear()}`
 }
 
 const formatTime = (dateString) => {
   if (!dateString) return ''
   const date = new Date(dateString)
-  const heures = date.getHours().toString().padStart(2, '0')
-  const minutes = date.getMinutes().toString().padStart(2, '0')
-  return `${heures}h${minutes}`
+  return `${date.getHours().toString().padStart(2, '0')}h${date.getMinutes().toString().padStart(2, '0')}`
 }
 
 const formatDateTime = (dateString) => {
@@ -33,17 +35,27 @@ const toAirtableDateTime = (dateStr, timeStr) => {
   if (!dateStr) return new Date().toISOString()
   const [year, month, day] = dateStr.split('-')
   const [hours, minutes] = timeStr ? timeStr.split(':') : ['12', '00']
-  const date = new Date(year, month - 1, day, hours, minutes)
-  return date.toISOString()
+  return new Date(year, month - 1, day, hours, minutes).toISOString()
 }
 
+const getCurrentDateTime = () => {
+  const now = new Date()
+  return {
+    date: now.toISOString().split('T')[0],
+    time: now.toTimeString().slice(0, 5)
+  }
+}
+
+// === COMPOSANT PRINCIPAL ===
 function App() {
   // === ÉTATS AUTH ===
-  const [isLoggedIn, setIsLoggedIn] = useState(false)
-  const [currentUser, setCurrentUser] = useState(null)
-  const [setupComplete, setSetupComplete] = useState(true)
-  const [showSetup, setShowSetup] = useState(false)
-  const [authLoading, setAuthLoading] = useState(true)
+  const [authState, setAuthState] = useState({
+    isLoggedIn: false,
+    currentUser: null,
+    setupComplete: true,
+    showSetup: false,
+    loading: true
+  })
   
   // === ÉTATS APP ===
   const [activeTab, setActiveTab] = useState('mouvements')
@@ -51,22 +63,32 @@ function App() {
   const [saving, setSaving] = useState(false)
   
   // === DONNÉES ===
-  const [caisses, setCaisses] = useState([])
+  const [data, setData] = useState({
+    caisses: [],
+    categories: { entree: [], sortie: [] },
+    transactions: [],
+    team: []
+  })
   const [currentCaisse, setCurrentCaisse] = useState(null)
-  const [categories, setCategories] = useState({ entree: [], sortie: [] })
-  const [transactions, setTransactions] = useState([])
-  const [team, setTeam] = useState([])
   
   // === MODALS ===
-  const [showModal, setShowModal] = useState(false)
-  const [showUserModal, setShowUserModal] = useState(false)
-  const [showResetModal, setShowResetModal] = useState(false)
-  const [showCategoryModal, setShowCategoryModal] = useState(false)
-  const [showCaisseModal, setShowCaisseModal] = useState(false)
-  const [editingUser, setEditingUser] = useState(null)
-  const [editingTransaction, setEditingTransaction] = useState(null)
-  const [editingCategory, setEditingCategory] = useState(null)
-  const [editingCaisse, setEditingCaisse] = useState(null)
+  const [modals, setModals] = useState({
+    transaction: false,
+    user: false,
+    reset: false,
+    category: false,
+    caisse: false,
+    deleteCaisse: false
+  })
+  
+  // === ÉDITION ===
+  const [editing, setEditing] = useState({
+    transaction: null,
+    user: null,
+    category: null,
+    caisse: null,
+    caisseToDelete: null
+  })
   
   // === FORMULAIRES ===
   const [loginForm, setLoginForm] = useState({ email: '', password: '' })
@@ -74,19 +96,31 @@ function App() {
   const [setupKey, setSetupKey] = useState('')
   const [newType, setNewType] = useState('sortie')
   const [formData, setFormData] = useState({ amount: '', reason: '', user: '', category: '', note: '', date: '', time: '' })
-  const [newMemberForm, setNewMemberForm] = useState({ nom: '', email: '', password: '', role: 'membre' })
-  const [resetConfirm, setResetConfirm] = useState('')
-  const [resetMode, setResetMode] = useState('zero')
-  const [resetAmount, setResetAmount] = useState('')
+  const [memberForm, setMemberForm] = useState({ nom: '', email: '', password: '', role: 'membre' })
   const [categoryForm, setCategoryForm] = useState({ type: 'sortie', label: '', icon: '📦' })
   const [caisseForm, setCaisseForm] = useState({ nom: '', description: '', icon: '💰' })
   
+  // === RÉINITIALISATION ===
+  const [resetState, setResetState] = useState({
+    mode: 'caisse', // 'caisse' | 'all' | 'orphans'
+    withAmount: false,
+    amount: '',
+    confirm: ''
+  })
+  
   // === FILTRES ===
-  const [filterPeriod, setFilterPeriod] = useState('tout')
-  const [filterUser, setFilterUser] = useState('tous')
-  const [searchQuery, setSearchQuery] = useState('')
-  const [loginError, setLoginError] = useState('')
-  const [setupError, setSetupError] = useState('')
+  const [filters, setFilters] = useState({
+    period: 'tout',
+    user: 'tous',
+    search: ''
+  })
+  
+  // === ERREURS ===
+  const [errors, setErrors] = useState({ login: '', setup: '' })
+
+  // === RACCOURCIS ===
+  const { caisses, categories, transactions, team } = data
+  const { isLoggedIn, currentUser, setupComplete, showSetup } = authState
 
   // === VÉRIFICATION AUTH AU DÉMARRAGE ===
   useEffect(() => {
@@ -94,37 +128,37 @@ function App() {
   }, [])
 
   const checkAuth = async () => {
-    setAuthLoading(true)
+    setAuthState(prev => ({ ...prev, loading: true }))
     
-    // Vérifier si setup nécessaire
     try {
       const res = await fetch(`${API_URL}?action=check_setup`)
-      const data = await res.json()
-      setSetupComplete(data.setupComplete)
+      const result = await res.json()
       
-      if (!data.setupComplete) {
-        // Vérifier si clé dans URL
+      let newState = { setupComplete: result.setupComplete, loading: false }
+      
+      if (!result.setupComplete) {
         const urlParams = new URLSearchParams(window.location.search)
         const key = urlParams.get('key')
         if (key) {
           setSetupKey(key)
-          setShowSetup(true)
+          newState.showSetup = true
         }
       }
+      
+      // Vérifier session existante
+      const savedUser = localStorage.getItem('manrina_user')
+      const savedToken = localStorage.getItem('manrina_token')
+      
+      if (savedUser && savedToken) {
+        newState.currentUser = JSON.parse(savedUser)
+        newState.isLoggedIn = true
+      }
+      
+      setAuthState(prev => ({ ...prev, ...newState }))
     } catch (err) {
-      console.error('Erreur check setup:', err)
+      console.error('Erreur check auth:', err)
+      setAuthState(prev => ({ ...prev, loading: false }))
     }
-    
-    // Vérifier si déjà connecté
-    const savedUser = localStorage.getItem('manrina_user')
-    const savedToken = localStorage.getItem('manrina_token')
-    
-    if (savedUser && savedToken) {
-      setCurrentUser(JSON.parse(savedUser))
-      setIsLoggedIn(true)
-    }
-    
-    setAuthLoading(false)
   }
 
   // === CHARGEMENT DONNÉES ===
@@ -132,9 +166,9 @@ function App() {
     if (isLoggedIn) {
       loadData()
     }
-  }, [isLoggedIn, currentCaisse])
+  }, [isLoggedIn])
 
-  const loadData = async () => {
+  const loadData = useCallback(async () => {
     setLoading(true)
     try {
       const [teamRes, catRes, transRes, caissesRes] = await Promise.all([
@@ -144,75 +178,165 @@ function App() {
         fetch(`${API_URL}?table=Caisses`)
       ])
       
-      const teamData = await teamRes.json()
-      const catData = await catRes.json()
-      const transData = await transRes.json()
-      const caissesData = await caissesRes.json()
+      const [teamData, catData, transData, caissesData] = await Promise.all([
+        teamRes.json(),
+        catRes.json(),
+        transRes.json(),
+        caissesRes.json()
+      ])
       
-      // Équipe
-      if (teamData.records) {
-        setTeam(teamData.records.map(r => ({
+      // Parser équipe
+      const parsedTeam = teamData.records?.map(r => ({
+        id: r.id,
+        name: r.fields.Nom || '',
+        email: r.fields.Email || '',
+        role: r.fields.Role || 'membre'
+      })) || []
+      
+      // Parser caisses
+      const parsedCaisses = caissesData.records?.map(r => ({
+        id: r.id,
+        nom: r.fields.Nom || '',
+        description: r.fields.Description || '',
+        icon: r.fields.Icon || '💰'
+      })) || []
+      
+      // Parser catégories
+      const parsedCategories = { entree: [], sortie: [] }
+      catData.records?.forEach(r => {
+        const type = r.fields.Type || 'sortie'
+        parsedCategories[type].push({
           id: r.id,
-          name: r.fields.Nom || '',
-          email: r.fields.Email || '',
-          role: r.fields.Role || 'membre'
-        })))
-      }
-      
-      // Caisses
-      if (caissesData.records) {
-        const loadedCaisses = caissesData.records.map(r => ({
-          id: r.id,
-          nom: r.fields.Nom || '',
-          description: r.fields.Description || '',
-          icon: r.fields.Icon || '💰'
-        }))
-        setCaisses(loadedCaisses)
-        
-        // Sélectionner la première caisse par défaut
-        if (!currentCaisse && loadedCaisses.length > 0) {
-          setCurrentCaisse(loadedCaisses[0].id)
-        }
-      }
-      
-      // Catégories
-      if (catData.records) {
-        const cats = { entree: [], sortie: [] }
-        catData.records.forEach(r => {
-          const type = r.fields.Type || 'sortie'
-          cats[type].push({
-            id: r.id,
-            label: r.fields.Label || '',
-            icon: r.fields.Icon || '📦'
-          })
+          label: r.fields.Label || '',
+          icon: r.fields.Icon || '📦'
         })
-        setCategories(cats)
-      }
+      })
       
-      // Transactions
-      if (transData.records) {
-        setTransactions(transData.records.map(r => ({
-          id: r.id,
-          type: r.fields.Type || 'sortie',
-          category: r.fields.Categorie?.[0] || '',
-          amount: r.fields.Montant || 0,
-          reason: r.fields.Motif || '',
-          user: r.fields.Utilisateur?.[0] || '',
-          date: r.fields.Date || '',
-          note: r.fields.Note || '',
-          caisse: r.fields.Caisse?.[0] || ''
-        })))
+      // Parser transactions
+      const parsedTransactions = transData.records?.map(r => ({
+        id: r.id,
+        type: r.fields.Type || 'sortie',
+        category: r.fields.Categorie?.[0] || '',
+        amount: r.fields.Montant || 0,
+        reason: r.fields.Motif || '',
+        user: r.fields.Utilisateur?.[0] || '',
+        date: r.fields.Date || '',
+        note: r.fields.Note || '',
+        caisse: r.fields.Caisse?.[0] || ''
+      })) || []
+      
+      setData({
+        team: parsedTeam,
+        caisses: parsedCaisses,
+        categories: parsedCategories,
+        transactions: parsedTransactions
+      })
+      
+      // Sélectionner première caisse si aucune sélectionnée
+      if (!currentCaisse && parsedCaisses.length > 0) {
+        setCurrentCaisse(parsedCaisses[0].id)
       }
     } catch (err) {
       console.error('Erreur chargement:', err)
     }
     setLoading(false)
-  }
+  }, [currentCaisse])
+
+  // === CALCULS MÉMOÏSÉS ===
+  const filteredTransactions = useMemo(() => {
+    let filtered = currentCaisse 
+      ? transactions.filter(t => t.caisse === currentCaisse)
+      : transactions
+    
+    const now = new Date()
+    if (filters.period === 'jour') {
+      const today = now.toISOString().split('T')[0]
+      filtered = filtered.filter(t => t.date?.split('T')[0] === today)
+    } else if (filters.period === 'semaine') {
+      const weekAgo = new Date(now - 7 * 24 * 60 * 60 * 1000).toISOString().split('T')[0]
+      filtered = filtered.filter(t => t.date?.split('T')[0] >= weekAgo)
+    } else if (filters.period === 'mois') {
+      const monthAgo = new Date(now - 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0]
+      filtered = filtered.filter(t => t.date?.split('T')[0] >= monthAgo)
+    }
+    
+    if (filters.user !== 'tous') {
+      filtered = filtered.filter(t => t.user === filters.user)
+    }
+    
+    if (filters.search) {
+      const q = filters.search.toLowerCase()
+      filtered = filtered.filter(t => 
+        t.reason.toLowerCase().includes(q) || 
+        t.note?.toLowerCase().includes(q) ||
+        team.find(u => u.id === t.user)?.name.toLowerCase().includes(q)
+      )
+    }
+    
+    return filtered.sort((a, b) => new Date(b.date) - new Date(a.date))
+  }, [transactions, currentCaisse, filters, team])
+
+  const orphanTransactions = useMemo(() => {
+    const caisseIds = caisses.map(c => c.id)
+    return transactions.filter(t => !t.caisse || !caisseIds.includes(t.caisse))
+  }, [transactions, caisses])
+
+  const soldeActuel = useMemo(() => {
+    const currentTrans = currentCaisse 
+      ? transactions.filter(t => t.caisse === currentCaisse)
+      : transactions
+    const entrees = currentTrans.filter(t => t.type === 'entree').reduce((sum, t) => sum + t.amount, 0)
+    const sorties = currentTrans.filter(t => t.type === 'sortie').reduce((sum, t) => sum + t.amount, 0)
+    return entrees - sorties
+  }, [transactions, currentCaisse])
+
+  const totaux = useMemo(() => ({
+    entrees: filteredTransactions.filter(t => t.type === 'entree').reduce((sum, t) => sum + t.amount, 0),
+    sorties: filteredTransactions.filter(t => t.type === 'sortie').reduce((sum, t) => sum + t.amount, 0)
+  }), [filteredTransactions])
+
+  const statsByCategory = useMemo(() => {
+    const getStats = (type) => categories[type].map(cat => ({
+      ...cat,
+      total: filteredTransactions.filter(t => t.type === type && t.category === cat.id).reduce((sum, t) => sum + t.amount, 0),
+      count: filteredTransactions.filter(t => t.type === type && t.category === cat.id).length
+    })).filter(c => c.count > 0)
+    
+    return { entree: getStats('entree'), sortie: getStats('sortie') }
+  }, [filteredTransactions, categories])
+
+  const statsByUser = useMemo(() => {
+    return team.map(u => ({
+      id: u.id,
+      name: u.name,
+      entrees: filteredTransactions.filter(t => t.user === u.id && t.type === 'entree').reduce((sum, t) => sum + t.amount, 0),
+      sorties: filteredTransactions.filter(t => t.user === u.id && t.type === 'sortie').reduce((sum, t) => sum + t.amount, 0),
+      count: filteredTransactions.filter(t => t.user === u.id).length
+    })).filter(u => u.count > 0)
+  }, [filteredTransactions, team])
+
+  // === HELPERS ===
+  const getUserName = useCallback((userId) => {
+    return team.find(u => u.id === userId)?.name || ''
+  }, [team])
+
+  const getCategoryInfo = useCallback((catId, type) => {
+    return categories[type]?.find(c => c.id === catId) || { label: '', icon: '💰' }
+  }, [categories])
+
+  const getCaisseName = useCallback((caisseId) => {
+    const caisse = caisses.find(c => c.id === caisseId)
+    return caisse ? `${caisse.icon} ${caisse.nom}` : ''
+  }, [caisses])
+
+  const getTransactionsForCaisse = useCallback((caisseId) => {
+    return transactions.filter(t => t.caisse === caisseId)
+  }, [transactions])
 
   // === AUTHENTIFICATION ===
   const handleLogin = async (e) => {
     e.preventDefault()
-    setLoginError('')
+    setErrors(prev => ({ ...prev, login: '' }))
     setSaving(true)
     
     try {
@@ -222,19 +346,18 @@ function App() {
         body: JSON.stringify(loginForm)
       })
       
-      const data = await res.json()
+      const result = await res.json()
       
-      if (data.success) {
-        localStorage.setItem('manrina_user', JSON.stringify(data.user))
-        localStorage.setItem('manrina_token', data.token)
-        setCurrentUser(data.user)
-        setIsLoggedIn(true)
+      if (result.success) {
+        localStorage.setItem('manrina_user', JSON.stringify(result.user))
+        localStorage.setItem('manrina_token', result.token)
+        setAuthState(prev => ({ ...prev, currentUser: result.user, isLoggedIn: true }))
         setLoginForm({ email: '', password: '' })
       } else {
-        setLoginError(data.error || 'Erreur de connexion')
+        setErrors(prev => ({ ...prev, login: result.error || 'Erreur de connexion' }))
       }
     } catch (err) {
-      setLoginError('Erreur de connexion')
+      setErrors(prev => ({ ...prev, login: 'Erreur de connexion' }))
     }
     
     setSaving(false)
@@ -242,15 +365,15 @@ function App() {
 
   const handleSetup = async (e) => {
     e.preventDefault()
-    setSetupError('')
+    setErrors(prev => ({ ...prev, setup: '' }))
     
     if (setupForm.password !== setupForm.confirmPassword) {
-      setSetupError('Les mots de passe ne correspondent pas')
+      setErrors(prev => ({ ...prev, setup: 'Les mots de passe ne correspondent pas' }))
       return
     }
     
     if (setupForm.password.length < 8) {
-      setSetupError('Le mot de passe doit contenir au moins 8 caractères')
+      setErrors(prev => ({ ...prev, setup: 'Le mot de passe doit contenir au moins 8 caractères' }))
       return
     }
     
@@ -267,19 +390,17 @@ function App() {
         })
       })
       
-      const data = await res.json()
+      const result = await res.json()
       
-      if (data.success) {
-        setSetupComplete(true)
-        setShowSetup(false)
-        // Nettoyer l'URL
+      if (result.success) {
+        setAuthState(prev => ({ ...prev, setupComplete: true, showSetup: false }))
         window.history.replaceState({}, document.title, window.location.pathname)
         alert('Compte administrateur créé ! Vous pouvez maintenant vous connecter.')
       } else {
-        setSetupError(data.error || 'Erreur lors du setup')
+        setErrors(prev => ({ ...prev, setup: result.error || 'Erreur lors du setup' }))
       }
     } catch (err) {
-      setSetupError('Erreur lors du setup')
+      setErrors(prev => ({ ...prev, setup: 'Erreur lors du setup' }))
     }
     
     setSaving(false)
@@ -288,125 +409,46 @@ function App() {
   const handleLogout = () => {
     localStorage.removeItem('manrina_user')
     localStorage.removeItem('manrina_token')
-    setCurrentUser(null)
-    setIsLoggedIn(false)
-  }
-
-  // === HELPERS ===
-  const getUserName = (userId) => {
-    const user = team.find(u => u.id === userId)
-    return user?.name || ''
-  }
-
-  const getCategoryInfo = (catId, type) => {
-    const cat = categories[type]?.find(c => c.id === catId)
-    return cat || { label: '', icon: '💰' }
-  }
-
-  const getCaisseName = (caisseId) => {
-    const caisse = caisses.find(c => c.id === caisseId)
-    return caisse ? `${caisse.icon} ${caisse.nom}` : ''
-  }
-
-  // === CALCULS ===
-  const getTransactionsForCurrentCaisse = () => {
-    if (!currentCaisse) return transactions
-    return transactions.filter(t => t.caisse === currentCaisse)
-  }
-
-  const filterTransactions = () => {
-    let filtered = getTransactionsForCurrentCaisse()
-    
-    const now = new Date()
-    if (filterPeriod === 'jour') {
-      const today = now.toISOString().split('T')[0]
-      filtered = filtered.filter(t => t.date?.split('T')[0] === today)
-    } else if (filterPeriod === 'semaine') {
-      const weekAgo = new Date(now - 7 * 24 * 60 * 60 * 1000).toISOString().split('T')[0]
-      filtered = filtered.filter(t => t.date?.split('T')[0] >= weekAgo)
-    } else if (filterPeriod === 'mois') {
-      const monthAgo = new Date(now - 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0]
-      filtered = filtered.filter(t => t.date?.split('T')[0] >= monthAgo)
-    }
-    
-    if (filterUser !== 'tous') {
-      filtered = filtered.filter(t => t.user === filterUser)
-    }
-    
-    if (searchQuery) {
-      const q = searchQuery.toLowerCase()
-      filtered = filtered.filter(t => 
-        t.reason.toLowerCase().includes(q) || 
-        t.note?.toLowerCase().includes(q) ||
-        getUserName(t.user).toLowerCase().includes(q)
-      )
-    }
-    
-    return filtered.sort((a, b) => new Date(b.date) - new Date(a.date))
-  }
-
-  const filteredTransactions = filterTransactions()
-  const currentCaisseTransactions = getTransactionsForCurrentCaisse()
-  
-  const totalEntrees = filteredTransactions.filter(t => t.type === 'entree').reduce((sum, t) => sum + t.amount, 0)
-  const totalSorties = filteredTransactions.filter(t => t.type === 'sortie').reduce((sum, t) => sum + t.amount, 0)
-  const soldeActuel = currentCaisseTransactions.filter(t => t.type === 'entree').reduce((sum, t) => sum + t.amount, 0) - currentCaisseTransactions.filter(t => t.type === 'sortie').reduce((sum, t) => sum + t.amount, 0)
-
-  const getStatsByCategory = (type) => {
-    const cats = categories[type]
-    return cats.map(cat => ({
-      ...cat,
-      total: filteredTransactions.filter(t => t.type === type && t.category === cat.id).reduce((sum, t) => sum + t.amount, 0),
-      count: filteredTransactions.filter(t => t.type === type && t.category === cat.id).length
-    })).filter(c => c.count > 0)
-  }
-
-  const getStatsByUser = () => {
-    return team.map(u => ({
-      id: u.id,
-      name: u.name,
-      entrees: filteredTransactions.filter(t => t.user === u.id && t.type === 'entree').reduce((sum, t) => sum + t.amount, 0),
-      sorties: filteredTransactions.filter(t => t.user === u.id && t.type === 'sortie').reduce((sum, t) => sum + t.amount, 0),
-      count: filteredTransactions.filter(t => t.user === u.id).length
-    })).filter(u => u.count > 0)
+    setAuthState(prev => ({ ...prev, currentUser: null, isLoggedIn: false }))
   }
 
   // === ACTIONS TRANSACTIONS ===
-  const openNewTransaction = () => {
-    setEditingTransaction(null)
-    setNewType('sortie')
-    const now = new Date()
-    const dateStr = now.toISOString().split('T')[0]
-    const timeStr = now.toTimeString().slice(0, 5)
-    setFormData({ amount: '', reason: '', user: currentUser?.id || '', category: '', note: '', date: dateStr, time: timeStr })
-    setShowModal(true)
+  const openModal = (type, editData = null) => {
+    setModals(prev => ({ ...prev, [type]: true }))
+    
+    if (type === 'transaction') {
+      if (editData) {
+        setEditing(prev => ({ ...prev, transaction: editData }))
+        setNewType(editData.type)
+        const dateObj = editData.date ? new Date(editData.date) : new Date()
+        setFormData({
+          amount: editData.amount.toString(),
+          reason: editData.reason,
+          user: editData.user,
+          category: editData.category,
+          note: editData.note || '',
+          date: dateObj.toISOString().split('T')[0],
+          time: dateObj.toTimeString().slice(0, 5)
+        })
+      } else {
+        setEditing(prev => ({ ...prev, transaction: null }))
+        setNewType('sortie')
+        const { date, time } = getCurrentDateTime()
+        setFormData({ amount: '', reason: '', user: currentUser?.id || '', category: '', note: '', date, time })
+      }
+    }
   }
 
-  const openEditTransaction = (t) => {
-    setEditingTransaction(t)
-    setNewType(t.type)
-    const dateObj = t.date ? new Date(t.date) : new Date()
-    const dateStr = dateObj.toISOString().split('T')[0]
-    const timeStr = dateObj.toTimeString().slice(0, 5)
-    setFormData({
-      amount: t.amount.toString(),
-      reason: t.reason,
-      user: t.user,
-      category: t.category,
-      note: t.note || '',
-      date: dateStr,
-      time: timeStr
-    })
-    setShowModal(true)
+  const closeModal = (type) => {
+    setModals(prev => ({ ...prev, [type]: false }))
+    setEditing(prev => ({ ...prev, [type.replace('Modal', '')]: null }))
   }
 
-  const handleSubmit = async (e) => {
+  const handleTransactionSubmit = async (e) => {
     e.preventDefault()
     if (!formData.amount || !formData.reason || !formData.user || !formData.category || !currentCaisse) return
     
     setSaving(true)
-    
-    const dateTime = toAirtableDateTime(formData.date, formData.time)
     
     const fields = {
       Motif: formData.reason,
@@ -414,30 +456,24 @@ function App() {
       Type: newType,
       Categorie: [formData.category],
       Utilisateur: [formData.user],
-      Date: dateTime,
+      Date: toAirtableDateTime(formData.date, formData.time),
       Note: formData.note,
       Caisse: [currentCaisse]
     }
     
     try {
-      if (editingTransaction) {
-        await fetch(`${API_URL}?table=Transactions&id=${editingTransaction.id}`, {
-          method: 'PATCH',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ fields })
-        })
-      } else {
-        await fetch(`${API_URL}?table=Transactions`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ fields })
-        })
-      }
+      const url = editing.transaction 
+        ? `${API_URL}?table=Transactions&id=${editing.transaction.id}`
+        : `${API_URL}?table=Transactions`
+      
+      await fetch(url, {
+        method: editing.transaction ? 'PATCH' : 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ fields })
+      })
       
       await loadData()
-      setFormData({ amount: '', reason: '', user: '', category: '', note: '', date: '', time: '' })
-      setEditingTransaction(null)
-      setShowModal(false)
+      closeModal('transaction')
     } catch (err) {
       console.error('Erreur sauvegarde:', err)
       alert('Erreur lors de la sauvegarde')
@@ -458,15 +494,9 @@ function App() {
   }
 
   // === ACTIONS MEMBRES ===
-  const openNewMember = () => {
-    setEditingUser(null)
-    setNewMemberForm({ nom: '', email: '', password: '', role: 'membre' })
-    setShowUserModal(true)
-  }
-
   const handleMemberSubmit = async (e) => {
     e.preventDefault()
-    if (!newMemberForm.nom || !newMemberForm.email || !newMemberForm.password) return
+    if (!memberForm.nom || !memberForm.email || !memberForm.password) return
     
     setSaving(true)
     
@@ -474,12 +504,12 @@ function App() {
       await fetch(`${API_URL}?action=create_member`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(newMemberForm)
+        body: JSON.stringify(memberForm)
       })
       
       await loadData()
-      setNewMemberForm({ nom: '', email: '', password: '', role: 'membre' })
-      setShowUserModal(false)
+      setMemberForm({ nom: '', email: '', password: '', role: 'membre' })
+      closeModal('user')
     } catch (err) {
       console.error('Erreur:', err)
       alert('Erreur lors de la création')
@@ -489,7 +519,6 @@ function App() {
   }
 
   const deleteUser = async (user) => {
-    // Vérifier si c'est le dernier admin
     const admins = team.filter(u => u.role === 'admin')
     if (user.role === 'admin' && admins.length <= 1) {
       alert('Impossible : vous devez garder au moins un administrateur')
@@ -512,16 +541,13 @@ function App() {
   }
 
   // === ACTIONS CAISSES ===
-  const openNewCaisse = () => {
-    setEditingCaisse(null)
-    setCaisseForm({ nom: '', description: '', icon: '💰' })
-    setShowCaisseModal(true)
-  }
-
-  const openEditCaisse = (caisse) => {
-    setEditingCaisse(caisse)
-    setCaisseForm({ nom: caisse.nom, description: caisse.description, icon: caisse.icon })
-    setShowCaisseModal(true)
+  const openCaisseModal = (caisse = null) => {
+    setEditing(prev => ({ ...prev, caisse }))
+    setCaisseForm(caisse 
+      ? { nom: caisse.nom, description: caisse.description, icon: caisse.icon }
+      : { nom: '', description: '', icon: '💰' }
+    )
+    setModals(prev => ({ ...prev, caisse: true }))
   }
 
   const handleCaisseSubmit = async (e) => {
@@ -537,24 +563,18 @@ function App() {
     }
     
     try {
-      if (editingCaisse) {
-        await fetch(`${API_URL}?table=Caisses&id=${editingCaisse.id}`, {
-          method: 'PATCH',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ fields })
-        })
-      } else {
-        await fetch(`${API_URL}?table=Caisses`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ fields })
-        })
-      }
+      const url = editing.caisse 
+        ? `${API_URL}?table=Caisses&id=${editing.caisse.id}`
+        : `${API_URL}?table=Caisses`
+      
+      await fetch(url, {
+        method: editing.caisse ? 'PATCH' : 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ fields })
+      })
       
       await loadData()
-      setCaisseForm({ nom: '', description: '', icon: '💰' })
-      setEditingCaisse(null)
-      setShowCaisseModal(false)
+      closeModal('caisse')
     } catch (err) {
       console.error('Erreur:', err)
     }
@@ -562,35 +582,50 @@ function App() {
     setSaving(false)
   }
 
-  const deleteCaisse = async (caisse) => {
-    if (transactions.some(t => t.caisse === caisse.id)) {
-      alert('Impossible : cette caisse a des opérations enregistrées')
-      return
-    }
-    if (!confirm(`Supprimer la caisse "${caisse.nom}" ?`)) return
+  const openDeleteCaisseModal = (caisse) => {
+    setEditing(prev => ({ ...prev, caisseToDelete: caisse }))
+    setModals(prev => ({ ...prev, deleteCaisse: true }))
+  }
+
+  const deleteCaisse = async (deleteOperations = false) => {
+    const caisse = editing.caisseToDelete
+    if (!caisse) return
+    
+    setSaving(true)
     
     try {
-      await fetch(`${API_URL}?table=Caisses&id=${caisse.id}`, { method: 'DELETE' })
-      if (currentCaisse === caisse.id) {
-        setCurrentCaisse(null)
+      // Supprimer les opérations si demandé
+      if (deleteOperations) {
+        const toDelete = transactions.filter(t => t.caisse === caisse.id)
+        for (const t of toDelete) {
+          await fetch(`${API_URL}?table=Transactions&id=${t.id}`, { method: 'DELETE' })
+        }
       }
+      
+      // Supprimer la caisse
+      await fetch(`${API_URL}?table=Caisses&id=${caisse.id}`, { method: 'DELETE' })
+      
+      if (currentCaisse === caisse.id) {
+        setCurrentCaisse(caisses.find(c => c.id !== caisse.id)?.id || null)
+      }
+      
       await loadData()
+      closeModal('deleteCaisse')
     } catch (err) {
       console.error('Erreur:', err)
     }
+    
+    setSaving(false)
   }
 
   // === ACTIONS CATÉGORIES ===
-  const openNewCategory = (type) => {
-    setEditingCategory(null)
-    setCategoryForm({ type, label: '', icon: '📦' })
-    setShowCategoryModal(true)
-  }
-
-  const openEditCategory = (type, cat) => {
-    setEditingCategory({ type, ...cat })
-    setCategoryForm({ type, label: cat.label, icon: cat.icon })
-    setShowCategoryModal(true)
+  const openCategoryModal = (type, cat = null) => {
+    setEditing(prev => ({ ...prev, category: cat ? { type, ...cat } : null }))
+    setCategoryForm(cat 
+      ? { type, label: cat.label, icon: cat.icon }
+      : { type, label: '', icon: '📦' }
+    )
+    setModals(prev => ({ ...prev, category: true }))
   }
 
   const handleCategorySubmit = async (e) => {
@@ -606,24 +641,18 @@ function App() {
     }
     
     try {
-      if (editingCategory) {
-        await fetch(`${API_URL}?table=Categories&id=${editingCategory.id}`, {
-          method: 'PATCH',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ fields })
-        })
-      } else {
-        await fetch(`${API_URL}?table=Categories`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ fields })
-        })
-      }
+      const url = editing.category 
+        ? `${API_URL}?table=Categories&id=${editing.category.id}`
+        : `${API_URL}?table=Categories`
+      
+      await fetch(url, {
+        method: editing.category ? 'PATCH' : 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ fields })
+      })
       
       await loadData()
-      setCategoryForm({ type: 'sortie', label: '', icon: '📦' })
-      setEditingCategory(null)
-      setShowCategoryModal(false)
+      closeModal('category')
     } catch (err) {
       console.error('Erreur:', err)
     }
@@ -646,38 +675,48 @@ function App() {
     }
   }
 
-  // === RESET ===
+  // === RÉINITIALISATION AMÉLIORÉE ===
   const openResetModal = () => {
-    setResetMode('zero')
-    setResetAmount('')
-    setResetConfirm('')
-    setShowResetModal(true)
+    setResetState({ mode: 'caisse', withAmount: false, amount: '', confirm: '' })
+    setModals(prev => ({ ...prev, reset: true }))
   }
 
   const handleReset = async () => {
-    if (resetConfirm !== 'REINITIALISER') return
+    if (resetState.confirm !== 'REINITIALISER') return
     
     setSaving(true)
     
     try {
-      // Supprimer les transactions de la caisse actuelle
-      const toDelete = transactions.filter(t => t.caisse === currentCaisse)
-      for (const t of toDelete) {
+      let transactionsToDelete = []
+      
+      if (resetState.mode === 'caisse' && currentCaisse) {
+        // Réinitialiser cette caisse seulement
+        transactionsToDelete = transactions.filter(t => t.caisse === currentCaisse)
+      } else if (resetState.mode === 'all') {
+        // Réinitialiser TOUTES les caisses
+        transactionsToDelete = [...transactions]
+      } else if (resetState.mode === 'orphans') {
+        // Nettoyer seulement les orphelines
+        transactionsToDelete = orphanTransactions
+      }
+      
+      // Supprimer les transactions
+      for (const t of transactionsToDelete) {
         await fetch(`${API_URL}?table=Transactions&id=${t.id}`, { method: 'DELETE' })
       }
       
-      // Si montant de départ
-      if (resetMode === 'montant' && parseFloat(resetAmount) > 0) {
+      // Ajouter montant de départ si demandé (seulement pour mode 'caisse')
+      if (resetState.mode === 'caisse' && resetState.withAmount && parseFloat(resetState.amount) > 0 && currentCaisse) {
         let categoryId = categories.entree[0]?.id
         const fondCaisseCat = categories.entree.find(c => c.label.toLowerCase().includes('fond'))
         if (fondCaisseCat) categoryId = fondCaisseCat.id
         
         const userId = currentUser?.id || team[0]?.id
         
-        if (categoryId && userId && currentCaisse) {
+        if (categoryId && userId) {
           const fields = {
             Motif: 'Fond de caisse initial',
-            Montant: parseFloat(resetAmount),
+            Montant: parseFloat(resetState.amount),
             Type: 'entree',
             Categorie: [categoryId],
             Utilisateur: [userId],
@@ -695,18 +734,17 @@ function App() {
       }
       
       await loadData()
-      setResetConfirm('')
-      setResetAmount('')
-      setShowResetModal(false)
+      closeModal('reset')
     } catch (err) {
       console.error('Erreur:', err)
+      alert('Erreur lors de la réinitialisation')
     }
     
     setSaving(false)
   }
 
-  // === LOADING SCREEN ===
-  if (authLoading) {
+  // === ÉCRANS DE CHARGEMENT / AUTH ===
+  if (authState.loading) {
     return (
       <div className="min-h-screen bg-gradient-to-br from-emerald-500 via-teal-500 to-cyan-600 flex items-center justify-center">
         <div className="text-center text-white">
@@ -731,58 +769,22 @@ function App() {
           <form onSubmit={handleSetup} className="space-y-4">
             <div>
               <label className="text-sm text-gray-500 mb-1 block">Nom</label>
-              <input
-                type="text"
-                value={setupForm.nom}
-                onChange={(e) => setSetupForm({...setupForm, nom: e.target.value})}
-                className="w-full p-3 bg-gray-100 rounded-xl"
-                required
-              />
+              <input type="text" value={setupForm.nom} onChange={(e) => setSetupForm({...setupForm, nom: e.target.value})} className="w-full p-3 bg-gray-100 rounded-xl" required />
             </div>
-            
             <div>
               <label className="text-sm text-gray-500 mb-1 block">Email</label>
-              <input
-                type="email"
-                value={setupForm.email}
-                onChange={(e) => setSetupForm({...setupForm, email: e.target.value})}
-                className="w-full p-3 bg-gray-100 rounded-xl"
-                required
-              />
+              <input type="email" value={setupForm.email} onChange={(e) => setSetupForm({...setupForm, email: e.target.value})} className="w-full p-3 bg-gray-100 rounded-xl" required />
             </div>
-            
             <div>
               <label className="text-sm text-gray-500 mb-1 block">Mot de passe</label>
-              <input
-                type="password"
-                value={setupForm.password}
-                onChange={(e) => setSetupForm({...setupForm, password: e.target.value})}
-                className="w-full p-3 bg-gray-100 rounded-xl"
-                required
-                minLength={8}
-              />
+              <input type="password" value={setupForm.password} onChange={(e) => setSetupForm({...setupForm, password: e.target.value})} className="w-full p-3 bg-gray-100 rounded-xl" required minLength={8} />
             </div>
-            
             <div>
               <label className="text-sm text-gray-500 mb-1 block">Confirmer mot de passe</label>
-              <input
-                type="password"
-                value={setupForm.confirmPassword}
-                onChange={(e) => setSetupForm({...setupForm, confirmPassword: e.target.value})}
-                className="w-full p-3 bg-gray-100 rounded-xl"
-                required
-              />
+              <input type="password" value={setupForm.confirmPassword} onChange={(e) => setSetupForm({...setupForm, confirmPassword: e.target.value})} className="w-full p-3 bg-gray-100 rounded-xl" required />
             </div>
-            
-            {setupError && (
-              <p className="text-red-500 text-sm text-center">{setupError}</p>
-            )}
-            
-            <button
-              type="submit"
-              disabled={saving}
-              className="w-full py-3 bg-teal-600 text-white rounded-xl font-bold"
-            >
+            {errors.setup && <p className="text-red-500 text-sm text-center">{errors.setup}</p>}
+            <button type="submit" disabled={saving} className="w-full py-3 bg-teal-600 text-white rounded-xl font-bold">
               {saving ? 'Création...' : 'Créer le compte admin'}
             </button>
           </form>
@@ -805,35 +807,14 @@ function App() {
           <form onSubmit={handleLogin} className="space-y-4">
             <div>
               <label className="text-sm text-gray-500 mb-1 block">Email</label>
-              <input
-                type="email"
-                value={loginForm.email}
-                onChange={(e) => setLoginForm({...loginForm, email: e.target.value})}
-                className="w-full p-3 bg-gray-100 rounded-xl"
-                required
-              />
+              <input type="email" value={loginForm.email} onChange={(e) => setLoginForm({...loginForm, email: e.target.value})} className="w-full p-3 bg-gray-100 rounded-xl" required />
             </div>
-            
             <div>
               <label className="text-sm text-gray-500 mb-1 block">Mot de passe</label>
-              <input
-                type="password"
-                value={loginForm.password}
-                onChange={(e) => setLoginForm({...loginForm, password: e.target.value})}
-                className="w-full p-3 bg-gray-100 rounded-xl"
-                required
-              />
+              <input type="password" value={loginForm.password} onChange={(e) => setLoginForm({...loginForm, password: e.target.value})} className="w-full p-3 bg-gray-100 rounded-xl" required />
             </div>
-            
-            {loginError && (
-              <p className="text-red-500 text-sm text-center">{loginError}</p>
-            )}
-            
-            <button
-              type="submit"
-              disabled={saving}
-              className="w-full py-3 bg-teal-600 text-white rounded-xl font-bold"
-            >
+            {errors.login && <p className="text-red-500 text-sm text-center">{errors.login}</p>}
+            <button type="submit" disabled={saving} className="w-full py-3 bg-teal-600 text-white rounded-xl font-bold">
               {saving ? 'Connexion...' : 'Se connecter'}
             </button>
           </form>
@@ -842,7 +823,6 @@ function App() {
     )
   }
 
-  // === APP PRINCIPALE ===
   if (loading) {
     return (
       <div className="min-h-screen bg-gradient-to-br from-emerald-500 via-teal-500 to-cyan-600 flex items-center justify-center">
@@ -854,12 +834,12 @@ function App() {
     )
   }
 
+  // === APP PRINCIPALE ===
   return (
     <div className="min-h-screen bg-gradient-to-br from-emerald-500 via-teal-500 to-cyan-600">
       {/* Header */}
       <header className="bg-white/10 backdrop-blur-md border-b border-white/20 p-4 sticky top-0 z-10">
         <div className="max-w-lg mx-auto">
-          {/* Ligne 1: Logo + User */}
           <div className="flex items-center justify-between mb-3">
             <div className="flex items-center gap-3">
               <div className="w-10 h-10 bg-white rounded-xl flex items-center justify-center text-xl">🥭</div>
@@ -868,15 +848,10 @@ function App() {
                 <p className="text-xs text-white/70">{currentUser?.nom} ({currentUser?.role})</p>
               </div>
             </div>
-            <button
-              onClick={handleLogout}
-              className="px-3 py-1 bg-white/20 text-white text-sm rounded-lg"
-            >
-              Déconnexion
-            </button>
+            <button onClick={handleLogout} className="px-3 py-1 bg-white/20 text-white text-sm rounded-lg">Déconnexion</button>
           </div>
           
-          {/* Ligne 2: Sélecteur de caisse + Solde */}
+          {/* Sélecteur caisse + Solde */}
           <div className="flex items-center justify-between mb-3 bg-white/10 rounded-xl p-3">
             <div className="flex-1">
               <p className="text-xs text-white/70 mb-1">Caisse active</p>
@@ -898,22 +873,30 @@ function App() {
               </p>
             </div>
           </div>
+
+          {/* Alerte opérations orphelines */}
+          {orphanTransactions.length > 0 && (
+            <div className="bg-orange-500/20 border border-orange-300/30 rounded-xl p-3 mb-3">
+              <p className="text-orange-100 text-sm">
+                ⚠️ {orphanTransactions.length} opération(s) orpheline(s) détectée(s)
+                <button 
+                  onClick={() => { setResetState(prev => ({ ...prev, mode: 'orphans' })); openResetModal(); }}
+                  className="ml-2 underline"
+                >
+                  Nettoyer
+                </button>
+              </p>
+            </div>
+          )}
           
           {/* Navigation */}
           <div className="flex gap-1 bg-white/10 p-1 rounded-xl">
-            {[
-              { id: 'mouvements', label: '📋 Opérations' },
-              { id: 'resume', label: '📊 Résumé' },
-              { id: 'equipe', label: '👥 Équipe' },
-              { id: 'parametres', label: '⚙️ Paramètres' },
-            ].map(tab => (
+            {TABS.map(tab => (
               <button
                 key={tab.id}
                 onClick={() => setActiveTab(tab.id)}
                 className={`flex-1 py-2 text-xs font-medium rounded-lg transition-all ${
-                  activeTab === tab.id 
-                    ? 'bg-white text-teal-700 shadow-sm' 
-                    : 'text-white/80 hover:bg-white/10'
+                  activeTab === tab.id ? 'bg-white text-teal-700 shadow-sm' : 'text-white/80 hover:bg-white/10'
                 }`}
               >
                 {tab.label}
@@ -929,10 +912,7 @@ function App() {
         {caisses.length === 0 && (
           <div className="bg-white rounded-2xl p-6 text-center mb-4">
             <p className="text-gray-600 mb-4">Commencez par créer une caisse</p>
-            <button
-              onClick={openNewCaisse}
-              className="px-4 py-2 bg-teal-600 text-white rounded-xl font-medium"
-            >
+            <button onClick={() => openCaisseModal()} className="px-4 py-2 bg-teal-600 text-white rounded-xl font-medium">
               + Créer une caisse
             </button>
           </div>
@@ -946,15 +926,15 @@ function App() {
               <input
                 type="text"
                 placeholder="🔍 Rechercher..."
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
+                value={filters.search}
+                onChange={(e) => setFilters(prev => ({ ...prev, search: e.target.value }))}
                 className="w-full px-4 py-2 bg-white/20 border border-white/20 rounded-xl text-white placeholder-white/50 text-sm"
               />
               
               <div className="flex gap-2">
                 <select
-                  value={filterPeriod}
-                  onChange={(e) => setFilterPeriod(e.target.value)}
+                  value={filters.period}
+                  onChange={(e) => setFilters(prev => ({ ...prev, period: e.target.value }))}
                   className="flex-1 px-3 py-2 bg-white/20 border border-white/20 rounded-xl text-white text-sm"
                 >
                   <option value="tout" className="text-gray-800">Toutes dates</option>
@@ -964,8 +944,8 @@ function App() {
                 </select>
                 
                 <select
-                  value={filterUser}
-                  onChange={(e) => setFilterUser(e.target.value)}
+                  value={filters.user}
+                  onChange={(e) => setFilters(prev => ({ ...prev, user: e.target.value }))}
                   className="flex-1 px-3 py-2 bg-white/20 border border-white/20 rounded-xl text-white text-sm"
                 >
                   <option value="tous" className="text-gray-800">Tous</option>
@@ -976,15 +956,15 @@ function App() {
               </div>
             </div>
 
-            {/* Résumé rapide */}
+            {/* Résumé */}
             <div className="grid grid-cols-2 gap-3">
               <div className="bg-white rounded-2xl p-4 shadow-lg">
                 <p className="text-xs text-gray-500 mb-1">Entrées</p>
-                <p className="text-xl font-bold text-emerald-600">+{totalEntrees.toFixed(2)} €</p>
+                <p className="text-xl font-bold text-emerald-600">+{totaux.entrees.toFixed(2)} €</p>
               </div>
               <div className="bg-white rounded-2xl p-4 shadow-lg">
                 <p className="text-xs text-gray-500 mb-1">Sorties</p>
-                <p className="text-xl font-bold text-red-500">-{totalSorties.toFixed(2)} €</p>
+                <p className="text-xl font-bold text-red-500">-{totaux.sorties.toFixed(2)} €</p>
               </div>
             </div>
 
@@ -1000,24 +980,15 @@ function App() {
                   return (
                     <div key={t.id} className="bg-white rounded-2xl p-4 shadow-lg">
                       <div className="flex justify-between items-start">
-                        <div 
-                          className="flex items-start gap-3 flex-1 cursor-pointer"
-                          onClick={() => openEditTransaction(t)}
-                        >
-                          <div className={`w-10 h-10 rounded-xl flex items-center justify-center text-lg ${
-                            t.type === 'entree' ? 'bg-emerald-100' : 'bg-red-100'
-                          }`}>
+                        <div className="flex items-start gap-3 flex-1 cursor-pointer" onClick={() => openModal('transaction', t)}>
+                          <div className={`w-10 h-10 rounded-xl flex items-center justify-center text-lg ${t.type === 'entree' ? 'bg-emerald-100' : 'bg-red-100'}`}>
                             {catInfo.icon}
                           </div>
                           <div className="flex-1 min-w-0">
                             <p className="font-medium text-gray-800 truncate">{t.reason}</p>
                             <p className="text-xs text-gray-400">{catInfo.label}</p>
-                            <p className="text-xs text-gray-400 mt-1">
-                              {getUserName(t.user)} • {formatDateTime(t.date)}
-                            </p>
-                            {t.note && (
-                              <p className="text-xs text-gray-500 mt-1 italic">📝 {t.note}</p>
-                            )}
+                            <p className="text-xs text-gray-400 mt-1">{getUserName(t.user)} • {formatDateTime(t.date)}</p>
+                            {t.note && <p className="text-xs text-gray-500 mt-1 italic">📝 {t.note}</p>}
                           </div>
                         </div>
                         <div className="flex flex-col items-end gap-2">
@@ -1025,18 +996,8 @@ function App() {
                             {t.type === 'entree' ? '+' : '-'}{t.amount.toFixed(2)} €
                           </p>
                           <div className="flex gap-1">
-                            <button 
-                              onClick={() => openEditTransaction(t)}
-                              className="text-xs text-gray-400 hover:text-teal-500 p-1"
-                            >
-                              ✏️
-                            </button>
-                            <button 
-                              onClick={() => deleteTransaction(t.id)}
-                              className="text-xs text-gray-400 hover:text-red-500 p-1"
-                            >
-                              🗑️
-                            </button>
+                            <button onClick={() => openModal('transaction', t)} className="text-xs text-gray-400 hover:text-teal-500 p-1">✏️</button>
+                            <button onClick={() => deleteTransaction(t.id)} className="text-xs text-gray-400 hover:text-red-500 p-1">🗑️</button>
                           </div>
                         </div>
                       </div>
@@ -1053,11 +1014,11 @@ function App() {
           <div className="space-y-4">
             <div className="bg-white rounded-2xl p-4 shadow-lg">
               <h3 className="font-bold text-gray-800 mb-3">📈 Entrées par catégorie</h3>
-              {getStatsByCategory('entree').length === 0 ? (
+              {statsByCategory.entree.length === 0 ? (
                 <p className="text-gray-400 text-sm">Aucune entrée</p>
               ) : (
                 <div className="space-y-2">
-                  {getStatsByCategory('entree').map(cat => (
+                  {statsByCategory.entree.map(cat => (
                     <div key={cat.id} className="flex justify-between items-center">
                       <span className="text-sm">{cat.icon} {cat.label}</span>
                       <span className="font-medium text-emerald-600">+{cat.total.toFixed(2)} €</span>
@@ -1069,11 +1030,11 @@ function App() {
 
             <div className="bg-white rounded-2xl p-4 shadow-lg">
               <h3 className="font-bold text-gray-800 mb-3">📉 Sorties par catégorie</h3>
-              {getStatsByCategory('sortie').length === 0 ? (
+              {statsByCategory.sortie.length === 0 ? (
                 <p className="text-gray-400 text-sm">Aucune sortie</p>
               ) : (
                 <div className="space-y-2">
-                  {getStatsByCategory('sortie').map(cat => (
+                  {statsByCategory.sortie.map(cat => (
                     <div key={cat.id} className="flex justify-between items-center">
                       <span className="text-sm">{cat.icon} {cat.label}</span>
                       <span className="font-medium text-red-500">-{cat.total.toFixed(2)} €</span>
@@ -1085,11 +1046,11 @@ function App() {
 
             <div className="bg-white rounded-2xl p-4 shadow-lg">
               <h3 className="font-bold text-gray-800 mb-3">👥 Par utilisateur</h3>
-              {getStatsByUser().length === 0 ? (
+              {statsByUser.length === 0 ? (
                 <p className="text-gray-400 text-sm">Aucune opération</p>
               ) : (
                 <div className="space-y-3">
-                  {getStatsByUser().map(u => (
+                  {statsByUser.map(u => (
                     <div key={u.id} className="flex justify-between items-center py-2 border-b border-gray-100 last:border-0">
                       <div>
                         <p className="font-medium">{u.name}</p>
@@ -1106,11 +1067,8 @@ function App() {
             </div>
 
             {currentCaisse && (
-              <button
-                onClick={openResetModal}
-                className="w-full py-3 bg-red-100 text-red-600 rounded-xl font-medium text-sm"
-              >
-                ⚠️ Réinitialiser cette caisse
+              <button onClick={openResetModal} className="w-full py-3 bg-red-100 text-red-600 rounded-xl font-medium text-sm">
+                ⚠️ Réinitialisation
               </button>
             )}
           </div>
@@ -1123,10 +1081,7 @@ function App() {
               <div className="flex justify-between items-center mb-4">
                 <h3 className="font-bold text-gray-800">👥 Équipe</h3>
                 {currentUser?.role === 'admin' && (
-                  <button
-                    onClick={openNewMember}
-                    className="px-3 py-1 bg-teal-100 text-teal-700 rounded-lg text-sm font-medium"
-                  >
+                  <button onClick={() => setModals(prev => ({ ...prev, user: true }))} className="px-3 py-1 bg-teal-100 text-teal-700 rounded-lg text-sm font-medium">
                     + Ajouter
                   </button>
                 )}
@@ -1148,12 +1103,7 @@ function App() {
                         </div>
                       </div>
                       {currentUser?.role === 'admin' && u.id !== currentUser?.id && (
-                        <button
-                          onClick={() => deleteUser(u)}
-                          className="p-2 text-gray-400 hover:text-red-500"
-                        >
-                          🗑️
-                        </button>
+                        <button onClick={() => deleteUser(u)} className="p-2 text-gray-400 hover:text-red-500">🗑️</button>
                       )}
                     </div>
                   ))}
@@ -1170,10 +1120,7 @@ function App() {
             <div className="bg-white rounded-2xl p-4 shadow-lg">
               <div className="flex justify-between items-center mb-4">
                 <h3 className="font-bold text-gray-800">💰 Caisses</h3>
-                <button
-                  onClick={openNewCaisse}
-                  className="px-3 py-1 bg-teal-100 text-teal-700 rounded-lg text-sm font-medium"
-                >
+                <button onClick={() => openCaisseModal()} className="px-3 py-1 bg-teal-100 text-teal-700 rounded-lg text-sm font-medium">
                   + Ajouter
                 </button>
               </div>
@@ -1182,31 +1129,26 @@ function App() {
                 <p className="text-gray-400 text-sm text-center py-4">Aucune caisse</p>
               ) : (
                 <div className="space-y-2">
-                  {caisses.map(c => (
-                    <div key={c.id} className="flex justify-between items-center p-3 bg-gray-50 rounded-xl">
-                      <div className="flex items-center gap-3">
-                        <span className="text-2xl">{c.icon}</span>
-                        <div>
-                          <p className="font-medium">{c.nom}</p>
-                          {c.description && <p className="text-xs text-gray-400">{c.description}</p>}
+                  {caisses.map(c => {
+                    const count = getTransactionsForCaisse(c.id).length
+                    return (
+                      <div key={c.id} className="flex justify-between items-center p-3 bg-gray-50 rounded-xl">
+                        <div className="flex items-center gap-3">
+                          <span className="text-2xl">{c.icon}</span>
+                          <div>
+                            <p className="font-medium">{c.nom}</p>
+                            <p className="text-xs text-gray-400">
+                              {c.description || `${count} opération(s)`}
+                            </p>
+                          </div>
+                        </div>
+                        <div className="flex gap-2">
+                          <button onClick={() => openCaisseModal(c)} className="p-2 text-gray-400 hover:text-teal-600">✏️</button>
+                          <button onClick={() => openDeleteCaisseModal(c)} className="p-2 text-gray-400 hover:text-red-500">🗑️</button>
                         </div>
                       </div>
-                      <div className="flex gap-2">
-                        <button
-                          onClick={() => openEditCaisse(c)}
-                          className="p-2 text-gray-400 hover:text-teal-600"
-                        >
-                          ✏️
-                        </button>
-                        <button
-                          onClick={() => deleteCaisse(c)}
-                          className="p-2 text-gray-400 hover:text-red-500"
-                        >
-                          🗑️
-                        </button>
-                      </div>
-                    </div>
-                  ))}
+                    )
+                  })}
                 </div>
               )}
             </div>
@@ -1215,10 +1157,7 @@ function App() {
             <div className="bg-white rounded-2xl p-4 shadow-lg">
               <div className="flex justify-between items-center mb-4">
                 <h3 className="font-bold text-gray-800">📈 Catégories Entrées</h3>
-                <button
-                  onClick={() => openNewCategory('entree')}
-                  className="px-3 py-1 bg-emerald-100 text-emerald-700 rounded-lg text-sm font-medium"
-                >
+                <button onClick={() => openCategoryModal('entree')} className="px-3 py-1 bg-emerald-100 text-emerald-700 rounded-lg text-sm font-medium">
                   + Ajouter
                 </button>
               </div>
@@ -1234,18 +1173,8 @@ function App() {
                         <span className="font-medium text-gray-700">{cat.label}</span>
                       </div>
                       <div className="flex gap-2">
-                        <button
-                          onClick={() => openEditCategory('entree', cat)}
-                          className="p-2 text-gray-400 hover:text-teal-600"
-                        >
-                          ✏️
-                        </button>
-                        <button
-                          onClick={() => deleteCategory('entree', cat)}
-                          className="p-2 text-gray-400 hover:text-red-500"
-                        >
-                          🗑️
-                        </button>
+                        <button onClick={() => openCategoryModal('entree', cat)} className="p-2 text-gray-400 hover:text-teal-600">✏️</button>
+                        <button onClick={() => deleteCategory('entree', cat)} className="p-2 text-gray-400 hover:text-red-500">🗑️</button>
                       </div>
                     </div>
                   ))}
@@ -1257,10 +1186,7 @@ function App() {
             <div className="bg-white rounded-2xl p-4 shadow-lg">
               <div className="flex justify-between items-center mb-4">
                 <h3 className="font-bold text-gray-800">📉 Catégories Sorties</h3>
-                <button
-                  onClick={() => openNewCategory('sortie')}
-                  className="px-3 py-1 bg-red-100 text-red-700 rounded-lg text-sm font-medium"
-                >
+                <button onClick={() => openCategoryModal('sortie')} className="px-3 py-1 bg-red-100 text-red-700 rounded-lg text-sm font-medium">
                   + Ajouter
                 </button>
               </div>
@@ -1276,70 +1202,76 @@ function App() {
                         <span className="font-medium text-gray-700">{cat.label}</span>
                       </div>
                       <div className="flex gap-2">
-                        <button
-                          onClick={() => openEditCategory('sortie', cat)}
-                          className="p-2 text-gray-400 hover:text-teal-600"
-                        >
-                          ✏️
-                        </button>
-                        <button
-                          onClick={() => deleteCategory('sortie', cat)}
-                          className="p-2 text-gray-400 hover:text-red-500"
-                        >
-                          🗑️
-                        </button>
+                        <button onClick={() => openCategoryModal('sortie', cat)} className="p-2 text-gray-400 hover:text-teal-600">✏️</button>
+                        <button onClick={() => deleteCategory('sortie', cat)} className="p-2 text-gray-400 hover:text-red-500">🗑️</button>
                       </div>
                     </div>
                   ))}
                 </div>
               )}
             </div>
+
+            {/* Maintenance */}
+            <div className="bg-white rounded-2xl p-4 shadow-lg">
+              <h3 className="font-bold text-gray-800 mb-4">🔧 Maintenance</h3>
+              
+              <div className="space-y-3">
+                {orphanTransactions.length > 0 && (
+                  <div className="p-3 bg-orange-50 rounded-xl">
+                    <div className="flex justify-between items-center">
+                      <div>
+                        <p className="font-medium text-orange-700">Opérations orphelines</p>
+                        <p className="text-xs text-orange-600">{orphanTransactions.length} opération(s) sans caisse</p>
+                      </div>
+                      <button 
+                        onClick={() => { setResetState(prev => ({ ...prev, mode: 'orphans', confirm: '' })); setModals(prev => ({ ...prev, reset: true })); }}
+                        className="px-3 py-1 bg-orange-500 text-white rounded-lg text-sm"
+                      >
+                        Nettoyer
+                      </button>
+                    </div>
+                  </div>
+                )}
+                
+                <button 
+                  onClick={() => { setResetState(prev => ({ ...prev, mode: 'all', confirm: '' })); setModals(prev => ({ ...prev, reset: true })); }}
+                  className="w-full py-3 bg-red-100 text-red-600 rounded-xl font-medium text-sm"
+                >
+                  🗑️ Réinitialiser TOUTES les caisses
+                </button>
+              </div>
+            </div>
           </div>
         )}
       </main>
 
-      {/* Bouton Ajouter (fixe) */}
+      {/* Bouton Ajouter */}
       {activeTab === 'mouvements' && currentCaisse && (
         <div className="fixed bottom-6 left-0 right-0 flex justify-center">
-          <button 
-            onClick={openNewTransaction}
-            className="bg-white text-teal-700 px-6 py-3 rounded-full font-bold shadow-xl flex items-center gap-2"
-          >
+          <button onClick={() => openModal('transaction')} className="bg-white text-teal-700 px-6 py-3 rounded-full font-bold shadow-xl flex items-center gap-2">
             <span className="text-xl">+</span> Nouvelle opération
           </button>
         </div>
       )}
 
       {/* === MODAL TRANSACTION === */}
-      {showModal && (
+      {modals.transaction && (
         <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-end justify-center z-50">
           <div className="bg-white w-full max-w-lg rounded-t-3xl p-6 max-h-[90vh] overflow-y-auto">
             <div className="flex justify-between items-center mb-6">
-              <h2 className="text-lg font-bold">
-                {editingTransaction ? 'Modifier l\'opération' : 'Nouvelle opération'}
-              </h2>
-              <button onClick={() => { setShowModal(false); setEditingTransaction(null); }} className="p-2 hover:bg-gray-100 rounded-full">✕</button>
+              <h2 className="text-lg font-bold">{editing.transaction ? 'Modifier l\'opération' : 'Nouvelle opération'}</h2>
+              <button onClick={() => closeModal('transaction')} className="p-2 hover:bg-gray-100 rounded-full">✕</button>
             </div>
             
-            <form onSubmit={handleSubmit} className="space-y-4">
+            <form onSubmit={handleTransactionSubmit} className="space-y-4">
               {/* Type */}
               <div className="flex bg-gray-100 p-1 rounded-xl">
-                <button 
-                  type="button"
-                  onClick={() => { setNewType('sortie'); setFormData({...formData, category: ''}); }}
-                  className={`flex-1 py-3 rounded-lg font-medium transition-all ${
-                    newType === 'sortie' ? 'bg-white text-red-600 shadow-sm' : 'text-gray-400'
-                  }`}
-                >
+                <button type="button" onClick={() => { setNewType('sortie'); setFormData(prev => ({ ...prev, category: '' })); }}
+                  className={`flex-1 py-3 rounded-lg font-medium transition-all ${newType === 'sortie' ? 'bg-white text-red-600 shadow-sm' : 'text-gray-400'}`}>
                   ➖ Sortie
                 </button>
-                <button 
-                  type="button"
-                  onClick={() => { setNewType('entree'); setFormData({...formData, category: ''}); }}
-                  className={`flex-1 py-3 rounded-lg font-medium transition-all ${
-                    newType === 'entree' ? 'bg-white text-emerald-600 shadow-sm' : 'text-gray-400'
-                  }`}
-                >
+                <button type="button" onClick={() => { setNewType('entree'); setFormData(prev => ({ ...prev, category: '' })); }}
+                  className={`flex-1 py-3 rounded-lg font-medium transition-all ${newType === 'entree' ? 'bg-white text-emerald-600 shadow-sm' : 'text-gray-400'}`}>
                   ➕ Entrée
                 </button>
               </div>
@@ -1349,21 +1281,17 @@ function App() {
                 <label className="text-sm text-gray-500 mb-2 block">Catégorie</label>
                 {categories[newType].length === 0 ? (
                   <p className="text-gray-400 text-sm p-4 bg-gray-100 rounded-xl">
-                    Aucune catégorie. <button type="button" onClick={() => { setShowModal(false); setActiveTab('parametres'); }} className="text-teal-600 underline">Créer une catégorie</button>
+                    Aucune catégorie. <button type="button" onClick={() => { closeModal('transaction'); setActiveTab('parametres'); }} className="text-teal-600 underline">Créer une catégorie</button>
                   </p>
                 ) : (
                   <div className="grid grid-cols-2 gap-2">
                     {categories[newType].map(cat => (
-                      <button
-                        key={cat.id}
-                        type="button"
-                        onClick={() => setFormData({...formData, category: cat.id})}
+                      <button key={cat.id} type="button" onClick={() => setFormData(prev => ({ ...prev, category: cat.id }))}
                         className={`p-3 rounded-xl text-left text-sm transition-all ${
                           formData.category === cat.id 
                             ? newType === 'entree' ? 'bg-emerald-100 text-emerald-700 ring-2 ring-emerald-500' : 'bg-red-100 text-red-700 ring-2 ring-red-500'
                             : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
-                        }`}
-                      >
+                        }`}>
                         {cat.icon} {cat.label}
                       </button>
                     ))}
@@ -1374,93 +1302,59 @@ function App() {
               {/* Montant */}
               <div>
                 <label className="text-sm text-gray-500 mb-2 block">Montant</label>
-                <input
-                  type="number"
-                  step="0.01"
-                  placeholder="0.00 €"
-                  value={formData.amount}
-                  onChange={(e) => setFormData({...formData, amount: e.target.value})}
-                  className="w-full p-4 bg-gray-100 rounded-xl text-2xl font-bold"
-                  required
-                />
+                <input type="number" step="0.01" placeholder="0.00 €" value={formData.amount}
+                  onChange={(e) => setFormData(prev => ({ ...prev, amount: e.target.value }))}
+                  className="w-full p-4 bg-gray-100 rounded-xl text-2xl font-bold" required />
               </div>
 
               {/* Date et Heure */}
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="text-sm text-gray-500 mb-2 block">Date</label>
-                  <input
-                    type="date"
-                    value={formData.date}
-                    onChange={(e) => setFormData({...formData, date: e.target.value})}
-                    className="w-full p-4 bg-gray-100 rounded-xl font-medium"
-                    required
-                  />
+                  <input type="date" value={formData.date}
+                    onChange={(e) => setFormData(prev => ({ ...prev, date: e.target.value }))}
+                    className="w-full p-4 bg-gray-100 rounded-xl font-medium" required />
                 </div>
                 <div>
                   <label className="text-sm text-gray-500 mb-2 block">Heure</label>
-                  <input
-                    type="time"
-                    value={formData.time}
-                    onChange={(e) => setFormData({...formData, time: e.target.value})}
-                    className="w-full p-4 bg-gray-100 rounded-xl font-medium"
-                    required
-                  />
+                  <input type="time" value={formData.time}
+                    onChange={(e) => setFormData(prev => ({ ...prev, time: e.target.value }))}
+                    className="w-full p-4 bg-gray-100 rounded-xl font-medium" required />
                 </div>
               </div>
 
               {/* Utilisateur */}
               <div>
                 <label className="text-sm text-gray-500 mb-2 block">Opéré par</label>
-                <select
-                  value={formData.user}
-                  onChange={(e) => setFormData({...formData, user: e.target.value})}
-                  className="w-full p-4 bg-gray-100 rounded-xl font-medium"
-                  required
-                >
+                <select value={formData.user} onChange={(e) => setFormData(prev => ({ ...prev, user: e.target.value }))}
+                  className="w-full p-4 bg-gray-100 rounded-xl font-medium" required>
                   <option value="">Sélectionner...</option>
-                  {team.map(u => (
-                    <option key={u.id} value={u.id}>{u.name}</option>
-                  ))}
+                  {team.map(u => <option key={u.id} value={u.id}>{u.name}</option>)}
                 </select>
               </div>
 
               {/* Motif */}
               <div>
                 <label className="text-sm text-gray-500 mb-2 block">Motif</label>
-                <input
-                  type="text"
-                  placeholder="Description de l'opération..."
-                  value={formData.reason}
-                  onChange={(e) => setFormData({...formData, reason: e.target.value})}
-                  className="w-full p-4 bg-gray-100 rounded-xl font-medium"
-                  required
-                />
+                <input type="text" placeholder="Description de l'opération..." value={formData.reason}
+                  onChange={(e) => setFormData(prev => ({ ...prev, reason: e.target.value }))}
+                  className="w-full p-4 bg-gray-100 rounded-xl font-medium" required />
               </div>
 
               {/* Note */}
               <div>
                 <label className="text-sm text-gray-500 mb-2 block">Note (optionnel)</label>
-                <input
-                  type="text"
-                  placeholder="Détails supplémentaires..."
-                  value={formData.note}
-                  onChange={(e) => setFormData({...formData, note: e.target.value})}
-                  className="w-full p-4 bg-gray-100 rounded-xl"
-                />
+                <input type="text" placeholder="Détails supplémentaires..." value={formData.note}
+                  onChange={(e) => setFormData(prev => ({ ...prev, note: e.target.value }))}
+                  className="w-full p-4 bg-gray-100 rounded-xl" />
               </div>
 
-              {/* Valider */}
-              <button
-                type="submit"
-                disabled={!formData.category || saving}
+              <button type="submit" disabled={!formData.category || saving}
                 className={`w-full py-4 rounded-xl font-bold text-white transition-all ${
-                  !formData.category || saving
-                    ? 'bg-gray-300 cursor-not-allowed' 
+                  !formData.category || saving ? 'bg-gray-300 cursor-not-allowed' 
                     : newType === 'entree' ? 'bg-emerald-600 hover:bg-emerald-700' : 'bg-red-600 hover:bg-red-700'
-                }`}
-              >
-                {saving ? 'Enregistrement...' : editingTransaction ? 'Enregistrer' : 'Valider'}
+                }`}>
+                {saving ? 'Enregistrement...' : editing.transaction ? 'Enregistrer' : 'Valider'}
               </button>
             </form>
           </div>
@@ -1468,61 +1362,28 @@ function App() {
       )}
 
       {/* === MODAL MEMBRE === */}
-      {showUserModal && (
+      {modals.user && (
         <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
           <div className="bg-white w-full max-w-sm rounded-2xl p-6">
             <h2 className="text-lg font-bold mb-4">Nouveau membre</h2>
-            
             <form onSubmit={handleMemberSubmit} className="space-y-4">
-              <input
-                type="text"
-                placeholder="Nom..."
-                value={newMemberForm.nom}
-                onChange={(e) => setNewMemberForm({...newMemberForm, nom: e.target.value})}
-                className="w-full p-4 bg-gray-100 rounded-xl font-medium"
-                required
-              />
-              
-              <input
-                type="email"
-                placeholder="Email..."
-                value={newMemberForm.email}
-                onChange={(e) => setNewMemberForm({...newMemberForm, email: e.target.value})}
-                className="w-full p-4 bg-gray-100 rounded-xl font-medium"
-                required
-              />
-              
-              <input
-                type="password"
-                placeholder="Mot de passe..."
-                value={newMemberForm.password}
-                onChange={(e) => setNewMemberForm({...newMemberForm, password: e.target.value})}
-                className="w-full p-4 bg-gray-100 rounded-xl font-medium"
-                required
-              />
-              
-              <select
-                value={newMemberForm.role}
-                onChange={(e) => setNewMemberForm({...newMemberForm, role: e.target.value})}
-                className="w-full p-4 bg-gray-100 rounded-xl font-medium"
-              >
+              <input type="text" placeholder="Nom..." value={memberForm.nom}
+                onChange={(e) => setMemberForm(prev => ({ ...prev, nom: e.target.value }))}
+                className="w-full p-4 bg-gray-100 rounded-xl font-medium" required />
+              <input type="email" placeholder="Email..." value={memberForm.email}
+                onChange={(e) => setMemberForm(prev => ({ ...prev, email: e.target.value }))}
+                className="w-full p-4 bg-gray-100 rounded-xl font-medium" required />
+              <input type="password" placeholder="Mot de passe..." value={memberForm.password}
+                onChange={(e) => setMemberForm(prev => ({ ...prev, password: e.target.value }))}
+                className="w-full p-4 bg-gray-100 rounded-xl font-medium" required />
+              <select value={memberForm.role} onChange={(e) => setMemberForm(prev => ({ ...prev, role: e.target.value }))}
+                className="w-full p-4 bg-gray-100 rounded-xl font-medium">
                 <option value="membre">Membre</option>
                 <option value="admin">Administrateur</option>
               </select>
-              
               <div className="flex gap-2">
-                <button
-                  type="button"
-                  onClick={() => setShowUserModal(false)}
-                  className="flex-1 py-3 bg-gray-100 rounded-xl font-medium"
-                >
-                  Annuler
-                </button>
-                <button
-                  type="submit"
-                  disabled={saving}
-                  className="flex-1 py-3 bg-teal-600 text-white rounded-xl font-medium"
-                >
+                <button type="button" onClick={() => closeModal('user')} className="flex-1 py-3 bg-gray-100 rounded-xl font-medium">Annuler</button>
+                <button type="submit" disabled={saving} className="flex-1 py-3 bg-teal-600 text-white rounded-xl font-medium">
                   {saving ? '...' : 'Ajouter'}
                 </button>
               </div>
@@ -1532,76 +1393,42 @@ function App() {
       )}
 
       {/* === MODAL CAISSE === */}
-      {showCaisseModal && (
+      {modals.caisse && (
         <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
           <div className="bg-white w-full max-w-sm rounded-2xl p-6">
-            <h2 className="text-lg font-bold mb-4">
-              {editingCaisse ? 'Modifier la caisse' : 'Nouvelle caisse'}
-            </h2>
-            
+            <h2 className="text-lg font-bold mb-4">{editing.caisse ? 'Modifier la caisse' : 'Nouvelle caisse'}</h2>
             <form onSubmit={handleCaisseSubmit} className="space-y-4">
               <div>
                 <label className="text-sm text-gray-500 mb-2 block">Nom</label>
-                <input
-                  type="text"
-                  placeholder="Ex: Marché Triple 8..."
-                  value={caisseForm.nom}
-                  onChange={(e) => setCaisseForm({...caisseForm, nom: e.target.value})}
-                  className="w-full p-4 bg-gray-100 rounded-xl font-medium"
-                  required
-                />
+                <input type="text" placeholder="Ex: Marché Triple 8..." value={caisseForm.nom}
+                  onChange={(e) => setCaisseForm(prev => ({ ...prev, nom: e.target.value }))}
+                  className="w-full p-4 bg-gray-100 rounded-xl font-medium" required />
               </div>
-              
               <div>
                 <label className="text-sm text-gray-500 mb-2 block">Description (optionnel)</label>
-                <input
-                  type="text"
-                  placeholder="Description..."
-                  value={caisseForm.description}
-                  onChange={(e) => setCaisseForm({...caisseForm, description: e.target.value})}
-                  className="w-full p-4 bg-gray-100 rounded-xl font-medium"
-                />
+                <input type="text" placeholder="Description..." value={caisseForm.description}
+                  onChange={(e) => setCaisseForm(prev => ({ ...prev, description: e.target.value }))}
+                  className="w-full p-4 bg-gray-100 rounded-xl font-medium" />
               </div>
-
               <div>
                 <label className="text-sm text-gray-500 mb-2 block">Icône</label>
                 <div className="flex flex-wrap gap-2 p-3 bg-gray-100 rounded-xl max-h-32 overflow-y-auto">
                   {EMOJIS.map(emoji => (
-                    <button
-                      key={emoji}
-                      type="button"
-                      onClick={() => setCaisseForm({...caisseForm, icon: emoji})}
-                      className={`w-10 h-10 text-xl rounded-lg transition-all ${
-                        caisseForm.icon === emoji 
-                          ? 'bg-teal-500 scale-110' 
-                          : 'bg-white hover:bg-gray-200'
-                      }`}
-                    >
+                    <button key={emoji} type="button" onClick={() => setCaisseForm(prev => ({ ...prev, icon: emoji }))}
+                      className={`w-10 h-10 text-xl rounded-lg transition-all ${caisseForm.icon === emoji ? 'bg-teal-500 scale-110' : 'bg-white hover:bg-gray-200'}`}>
                       {emoji}
                     </button>
                   ))}
                 </div>
               </div>
-
               <div className="p-4 bg-gray-50 rounded-xl flex items-center gap-3">
                 <span className="text-2xl">{caisseForm.icon}</span>
                 <span className="font-medium">{caisseForm.nom || 'Aperçu'}</span>
               </div>
-              
               <div className="flex gap-2">
-                <button
-                  type="button"
-                  onClick={() => { setShowCaisseModal(false); setEditingCaisse(null); }}
-                  className="flex-1 py-3 bg-gray-100 rounded-xl font-medium"
-                >
-                  Annuler
-                </button>
-                <button
-                  type="submit"
-                  disabled={saving}
-                  className="flex-1 py-3 bg-teal-600 text-white rounded-xl font-medium"
-                >
-                  {saving ? '...' : editingCaisse ? 'Modifier' : 'Créer'}
+                <button type="button" onClick={() => closeModal('caisse')} className="flex-1 py-3 bg-gray-100 rounded-xl font-medium">Annuler</button>
+                <button type="submit" disabled={saving} className="flex-1 py-3 bg-teal-600 text-white rounded-xl font-medium">
+                  {saving ? '...' : editing.caisse ? 'Modifier' : 'Créer'}
                 </button>
               </div>
             </form>
@@ -1609,68 +1436,82 @@ function App() {
         </div>
       )}
 
+      {/* === MODAL SUPPRESSION CAISSE === */}
+      {modals.deleteCaisse && editing.caisseToDelete && (
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+          <div className="bg-white w-full max-w-sm rounded-2xl p-6">
+            <h2 className="text-lg font-bold text-red-600 mb-4">🗑️ Supprimer la caisse</h2>
+            
+            <p className="text-gray-600 mb-4">
+              Caisse : <strong>{editing.caisseToDelete.icon} {editing.caisseToDelete.nom}</strong>
+            </p>
+            
+            {getTransactionsForCaisse(editing.caisseToDelete.id).length > 0 ? (
+              <div className="space-y-4">
+                <div className="p-3 bg-orange-50 rounded-xl">
+                  <p className="text-orange-700 text-sm">
+                    ⚠️ Cette caisse contient <strong>{getTransactionsForCaisse(editing.caisseToDelete.id).length} opération(s)</strong>
+                  </p>
+                </div>
+                
+                <p className="text-sm text-gray-600">Que voulez-vous faire ?</p>
+                
+                <div className="flex flex-col gap-2">
+                  <button onClick={() => deleteCaisse(true)} disabled={saving}
+                    className="w-full py-3 bg-red-600 text-white rounded-xl font-medium">
+                    {saving ? '...' : 'Supprimer caisse ET opérations'}
+                  </button>
+                  <button onClick={() => closeModal('deleteCaisse')} className="w-full py-3 bg-gray-100 rounded-xl font-medium">
+                    Annuler
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <div className="flex gap-2">
+                <button onClick={() => closeModal('deleteCaisse')} className="flex-1 py-3 bg-gray-100 rounded-xl font-medium">Annuler</button>
+                <button onClick={() => deleteCaisse(false)} disabled={saving} className="flex-1 py-3 bg-red-600 text-white rounded-xl font-medium">
+                  {saving ? '...' : 'Supprimer'}
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
       {/* === MODAL CATÉGORIE === */}
-      {showCategoryModal && (
+      {modals.category && (
         <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
           <div className="bg-white w-full max-w-sm rounded-2xl p-6">
             <h2 className="text-lg font-bold mb-4">
-              {editingCategory ? 'Modifier la catégorie' : `Nouvelle catégorie (${categoryForm.type === 'entree' ? 'Entrée' : 'Sortie'})`}
+              {editing.category ? 'Modifier la catégorie' : `Nouvelle catégorie (${categoryForm.type === 'entree' ? 'Entrée' : 'Sortie'})`}
             </h2>
-            
             <form onSubmit={handleCategorySubmit} className="space-y-4">
               <div>
                 <label className="text-sm text-gray-500 mb-2 block">Nom</label>
-                <input
-                  type="text"
-                  placeholder="Ex: Frais bancaires..."
-                  value={categoryForm.label}
-                  onChange={(e) => setCategoryForm({...categoryForm, label: e.target.value})}
-                  className="w-full p-4 bg-gray-100 rounded-xl font-medium"
-                  required
-                />
+                <input type="text" placeholder="Ex: Frais bancaires..." value={categoryForm.label}
+                  onChange={(e) => setCategoryForm(prev => ({ ...prev, label: e.target.value }))}
+                  className="w-full p-4 bg-gray-100 rounded-xl font-medium" required />
               </div>
-
               <div>
                 <label className="text-sm text-gray-500 mb-2 block">Icône</label>
                 <div className="flex flex-wrap gap-2 p-3 bg-gray-100 rounded-xl max-h-32 overflow-y-auto">
                   {EMOJIS.map(emoji => (
-                    <button
-                      key={emoji}
-                      type="button"
-                      onClick={() => setCategoryForm({...categoryForm, icon: emoji})}
-                      className={`w-10 h-10 text-xl rounded-lg transition-all ${
-                        categoryForm.icon === emoji 
-                          ? 'bg-teal-500 scale-110' 
-                          : 'bg-white hover:bg-gray-200'
-                      }`}
-                    >
+                    <button key={emoji} type="button" onClick={() => setCategoryForm(prev => ({ ...prev, icon: emoji }))}
+                      className={`w-10 h-10 text-xl rounded-lg transition-all ${categoryForm.icon === emoji ? 'bg-teal-500 scale-110' : 'bg-white hover:bg-gray-200'}`}>
                       {emoji}
                     </button>
                   ))}
                 </div>
               </div>
-
               <div className="p-4 bg-gray-50 rounded-xl flex items-center gap-3">
                 <span className="text-2xl">{categoryForm.icon}</span>
                 <span className="font-medium">{categoryForm.label || 'Aperçu'}</span>
               </div>
-              
               <div className="flex gap-2">
-                <button
-                  type="button"
-                  onClick={() => { setShowCategoryModal(false); setEditingCategory(null); }}
-                  className="flex-1 py-3 bg-gray-100 rounded-xl font-medium"
-                >
-                  Annuler
-                </button>
-                <button
-                  type="submit"
-                  disabled={saving}
-                  className={`flex-1 py-3 text-white rounded-xl font-medium ${
-                    categoryForm.type === 'entree' ? 'bg-emerald-600' : 'bg-red-600'
-                  }`}
-                >
-                  {saving ? '...' : editingCategory ? 'Modifier' : 'Créer'}
+                <button type="button" onClick={() => closeModal('category')} className="flex-1 py-3 bg-gray-100 rounded-xl font-medium">Annuler</button>
+                <button type="submit" disabled={saving}
+                  className={`flex-1 py-3 text-white rounded-xl font-medium ${categoryForm.type === 'entree' ? 'bg-emerald-600' : 'bg-red-600'}`}>
+                  {saving ? '...' : editing.category ? 'Modifier' : 'Créer'}
                 </button>
               </div>
             </form>
@@ -1679,87 +1520,76 @@ function App() {
       )}
 
       {/* === MODAL RÉINITIALISATION === */}
-      {showResetModal && (
+      {modals.reset && (
         <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-          <div className="bg-white w-full max-w-sm rounded-2xl p-6">
-            <h2 className="text-lg font-bold text-red-600 mb-4">⚠️ Réinitialiser la caisse</h2>
+          <div className="bg-white w-full max-w-sm rounded-2xl p-6 max-h-[90vh] overflow-y-auto">
+            <h2 className="text-lg font-bold text-red-600 mb-4">⚠️ Réinitialisation</h2>
             
-            <p className="text-sm text-gray-600 mb-4">
-              Caisse : <strong>{getCaisseName(currentCaisse)}</strong>
-            </p>
-            
+            {/* Mode de réinitialisation */}
             <div className="space-y-3 mb-4">
-              <label className="flex items-center gap-3 p-3 bg-gray-50 rounded-xl cursor-pointer">
-                <input
-                  type="radio"
-                  name="resetMode"
-                  checked={resetMode === 'zero'}
-                  onChange={() => setResetMode('zero')}
-                  className="w-5 h-5 text-teal-600"
-                />
+              {currentCaisse && (
+                <label className="flex items-start gap-3 p-3 bg-gray-50 rounded-xl cursor-pointer">
+                  <input type="radio" name="resetMode" checked={resetState.mode === 'caisse'}
+                    onChange={() => setResetState(prev => ({ ...prev, mode: 'caisse' }))} className="w-5 h-5 mt-0.5 text-teal-600" />
+                  <div>
+                    <p className="font-medium">Cette caisse seulement</p>
+                    <p className="text-xs text-gray-500">{getCaisseName(currentCaisse)} ({transactions.filter(t => t.caisse === currentCaisse).length} opérations)</p>
+                  </div>
+                </label>
+              )}
+              
+              <label className="flex items-start gap-3 p-3 bg-gray-50 rounded-xl cursor-pointer">
+                <input type="radio" name="resetMode" checked={resetState.mode === 'all'}
+                  onChange={() => setResetState(prev => ({ ...prev, mode: 'all' }))} className="w-5 h-5 mt-0.5 text-teal-600" />
                 <div>
-                  <p className="font-medium">Remettre à zéro</p>
-                  <p className="text-xs text-gray-500">Solde = 0 €</p>
+                  <p className="font-medium">TOUTES les caisses</p>
+                  <p className="text-xs text-gray-500">{transactions.length} opérations au total</p>
                 </div>
               </label>
               
-              <label className="flex items-center gap-3 p-3 bg-gray-50 rounded-xl cursor-pointer">
-                <input
-                  type="radio"
-                  name="resetMode"
-                  checked={resetMode === 'montant'}
-                  onChange={() => setResetMode('montant')}
-                  className="w-5 h-5 text-teal-600"
-                />
-                <div>
-                  <p className="font-medium">Avec montant de départ</p>
-                  <p className="text-xs text-gray-500">Définir un fond de caisse</p>
-                </div>
-              </label>
+              {orphanTransactions.length > 0 && (
+                <label className="flex items-start gap-3 p-3 bg-orange-50 rounded-xl cursor-pointer">
+                  <input type="radio" name="resetMode" checked={resetState.mode === 'orphans'}
+                    onChange={() => setResetState(prev => ({ ...prev, mode: 'orphans' }))} className="w-5 h-5 mt-0.5 text-orange-600" />
+                  <div>
+                    <p className="font-medium text-orange-700">Opérations orphelines</p>
+                    <p className="text-xs text-orange-600">{orphanTransactions.length} opération(s) sans caisse</p>
+                  </div>
+                </label>
+              )}
             </div>
 
-            {resetMode === 'montant' && (
+            {/* Option montant de départ (seulement pour mode 'caisse') */}
+            {resetState.mode === 'caisse' && (
               <div className="mb-4">
-                <label className="text-sm text-gray-500 mb-2 block">Montant (€)</label>
-                <input
-                  type="number"
-                  step="0.01"
-                  placeholder="Ex: 200.00"
-                  value={resetAmount}
-                  onChange={(e) => setResetAmount(e.target.value)}
-                  className="w-full p-4 bg-gray-100 rounded-xl text-xl font-bold"
-                />
+                <label className="flex items-center gap-3 mb-3">
+                  <input type="checkbox" checked={resetState.withAmount}
+                    onChange={(e) => setResetState(prev => ({ ...prev, withAmount: e.target.checked }))}
+                    className="w-5 h-5 text-teal-600 rounded" />
+                  <span className="text-sm font-medium">Avec montant de départ</span>
+                </label>
+                
+                {resetState.withAmount && (
+                  <input type="number" step="0.01" placeholder="Ex: 200.00 €" value={resetState.amount}
+                    onChange={(e) => setResetState(prev => ({ ...prev, amount: e.target.value }))}
+                    className="w-full p-4 bg-gray-100 rounded-xl text-xl font-bold" />
+                )}
               </div>
             )}
 
-            <p className="text-sm text-gray-600 mb-4">
-              Tapez <strong>REINITIALISER</strong> pour confirmer :
-            </p>
-            
-            <input
-              type="text"
-              value={resetConfirm}
-              onChange={(e) => setResetConfirm(e.target.value)}
-              className="w-full p-4 bg-gray-100 rounded-xl font-mono mb-4"
-              placeholder="REINITIALISER"
-            />
+            {/* Confirmation */}
+            <p className="text-sm text-gray-600 mb-2">Tapez <strong>REINITIALISER</strong> pour confirmer :</p>
+            <input type="text" value={resetState.confirm}
+              onChange={(e) => setResetState(prev => ({ ...prev, confirm: e.target.value }))}
+              className="w-full p-4 bg-gray-100 rounded-xl font-mono mb-4" placeholder="REINITIALISER" />
             
             <div className="flex gap-2">
-              <button
-                onClick={() => { setShowResetModal(false); setResetConfirm(''); setResetAmount(''); }}
-                className="flex-1 py-3 bg-gray-100 rounded-xl font-medium"
-              >
-                Annuler
-              </button>
-              <button
-                onClick={handleReset}
-                disabled={resetConfirm !== 'REINITIALISER' || saving || (resetMode === 'montant' && !resetAmount)}
+              <button onClick={() => closeModal('reset')} className="flex-1 py-3 bg-gray-100 rounded-xl font-medium">Annuler</button>
+              <button onClick={handleReset}
+                disabled={resetState.confirm !== 'REINITIALISER' || saving || (resetState.mode === 'caisse' && resetState.withAmount && !resetState.amount)}
                 className={`flex-1 py-3 rounded-xl font-medium ${
-                  resetConfirm === 'REINITIALISER' && !saving && (resetMode === 'zero' || resetAmount)
-                    ? 'bg-red-600 text-white' 
-                    : 'bg-gray-200 text-gray-400 cursor-not-allowed'
-                }`}
-              >
+                  resetState.confirm === 'REINITIALISER' && !saving ? 'bg-red-600 text-white' : 'bg-gray-200 text-gray-400 cursor-not-allowed'
+                }`}>
                 {saving ? '...' : 'Confirmer'}
               </button>
             </div>
