@@ -93,7 +93,6 @@ function App() {
   const [showResetModal, setShowResetModal] = useState(false)
   const [showCategoryModal, setShowCategoryModal] = useState(false)
   const [showCaisseModal, setShowCaisseModal] = useState(false)
-  const [showPasswordModal, setShowPasswordModal] = useState(false)
   const [editingUser, setEditingUser] = useState(null)
   const [editingTransaction, setEditingTransaction] = useState(null)
   const [editingCategory, setEditingCategory] = useState(null)
@@ -112,9 +111,6 @@ function App() {
   const [resetAmount, setResetAmount] = useState('')
   const [categoryForm, setCategoryForm] = useState({ type: 'sortie', label: '', icon: '📦' })
   const [caisseForm, setCaisseForm] = useState({ nom: '', description: '', icon: '💰' })
-  const [passwordForm, setPasswordForm] = useState({ currentPassword: '', newPassword: '', confirmPassword: '' })
-  const [passwordError, setPasswordError] = useState('')
-  const [passwordSuccess, setPasswordSuccess] = useState('')
   
   // === FILTRES ===
   const [filterPeriod, setFilterPeriod] = useState('tout')
@@ -592,18 +588,21 @@ function App() {
       
       const data = await res.json()
       
+      // Vérifier si c'est une erreur
       if (data.error) {
         setMemberError(data.error)
         setSaving(false)
         return
       }
       
+      // Vérifier si Airtable a retourné une erreur
       if (data.error?.message) {
         setMemberError(data.error.message)
         setSaving(false)
         return
       }
       
+      // Succès
       clearCache()
       await loadData(false)
       setNewMemberForm({ nom: '', email: '', password: '', role: 'membre' })
@@ -637,101 +636,6 @@ function App() {
     } catch (err) {
       console.error('Erreur:', err)
     }
-  }
-
-  // === CHANGER RÔLE ===
-  const toggleUserRole = async (user) => {
-    const admins = team.filter(u => u.role === 'admin')
-    
-    // Empêcher de retirer le dernier admin
-    if (user.role === 'admin' && admins.length <= 1) {
-      alert('Impossible : vous devez garder au moins un administrateur')
-      return
-    }
-    
-    const newRole = user.role === 'admin' ? 'membre' : 'admin'
-    const confirmMsg = user.role === 'admin' 
-      ? `Retirer les droits admin de ${user.name} ?`
-      : `Promouvoir ${user.name} en administrateur ?`
-    
-    if (!confirm(confirmMsg)) return
-    
-    setSaving(true)
-    
-    try {
-      const res = await fetch(`${API_URL}?action=update_role`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ userId: user.id, role: newRole })
-      })
-      
-      const data = await res.json()
-      
-      if (data.success) {
-        clearCache()
-        await loadData(false)
-      } else {
-        alert(data.error || 'Erreur lors de la modification')
-      }
-    } catch (err) {
-      console.error('Erreur:', err)
-      alert('Erreur de connexion')
-    }
-    
-    setSaving(false)
-  }
-
-  // === CHANGER MOT DE PASSE ===
-  const openPasswordModal = () => {
-    setPasswordForm({ currentPassword: '', newPassword: '', confirmPassword: '' })
-    setPasswordError('')
-    setPasswordSuccess('')
-    setShowPasswordModal(true)
-  }
-
-  const handlePasswordChange = async (e) => {
-    e.preventDefault()
-    setPasswordError('')
-    setPasswordSuccess('')
-    
-    if (passwordForm.newPassword !== passwordForm.confirmPassword) {
-      setPasswordError('Les nouveaux mots de passe ne correspondent pas')
-      return
-    }
-    
-    if (passwordForm.newPassword.length < 8) {
-      setPasswordError('Le nouveau mot de passe doit contenir au moins 8 caractères')
-      return
-    }
-    
-    setSaving(true)
-    
-    try {
-      const res = await fetch(`${API_URL}?action=change_password`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          userId: currentUser.id,
-          currentPassword: passwordForm.currentPassword,
-          newPassword: passwordForm.newPassword
-        })
-      })
-      
-      const data = await res.json()
-      
-      if (data.success) {
-        setPasswordSuccess('Mot de passe modifié avec succès !')
-        setPasswordForm({ currentPassword: '', newPassword: '', confirmPassword: '' })
-        setTimeout(() => setShowPasswordModal(false), 2000)
-      } else {
-        setPasswordError(data.error || 'Erreur lors de la modification')
-      }
-    } catch (err) {
-      console.error('Erreur:', err)
-      setPasswordError('Erreur de connexion au serveur')
-    }
-    
-    setSaving(false)
   }
 
   // === ACTIONS CAISSES ===
@@ -1111,21 +1015,12 @@ function App() {
                 <p className="text-xs text-white/70">{currentUser?.nom} ({currentUser?.role})</p>
               </div>
             </div>
-            <div className="flex gap-2">
-              <button
-                onClick={openPasswordModal}
-                className="px-3 py-1 bg-white/20 text-white text-sm rounded-lg hover:bg-white/30 transition-colors"
-                title="Modifier mot de passe"
-              >
-                🔐
-              </button>
-              <button
-                onClick={handleLogout}
-                className="px-3 py-1 bg-white/20 text-white text-sm rounded-lg hover:bg-white/30 transition-colors"
-              >
-                Déconnexion
-              </button>
-            </div>
+            <button
+              onClick={handleLogout}
+              className="px-3 py-1 bg-white/20 text-white text-sm rounded-lg hover:bg-white/30 transition-colors"
+            >
+              Déconnexion
+            </button>
           </div>
           
           {/* Ligne 2: Sélecteur de caisse + Soldes */}
@@ -1435,40 +1330,16 @@ function App() {
                         </div>
                         <div>
                           <span className="font-medium">{u.name}</span>
-                          <p className="text-xs text-gray-400">{u.email}</p>
-                          <span className={`text-xs px-2 py-0.5 rounded-full ${
-                            u.role === 'admin' 
-                              ? 'bg-purple-100 text-purple-700' 
-                              : 'bg-gray-100 text-gray-600'
-                          }`}>
-                            {u.role}
-                          </span>
+                          <p className="text-xs text-gray-400">{u.email} • {u.role}</p>
                         </div>
                       </div>
-                      {currentUser?.role === 'admin' && (
-                        <div className="flex gap-1">
-                          {/* Bouton changer rôle */}
-                          <button
-                            onClick={() => toggleUserRole(u)}
-                            className={`p-2 rounded-lg text-xs ${
-                              u.role === 'admin' 
-                                ? 'text-purple-500 hover:bg-purple-100' 
-                                : 'text-gray-400 hover:bg-gray-200'
-                            }`}
-                            title={u.role === 'admin' ? 'Retirer admin' : 'Promouvoir admin'}
-                          >
-                            {u.role === 'admin' ? '👑' : '⬆️'}
-                          </button>
-                          {/* Bouton supprimer */}
-                          {u.id !== currentUser?.id && (
-                            <button
-                              onClick={() => deleteUser(u)}
-                              className="p-2 text-gray-400 hover:text-red-500"
-                            >
-                              🗑️
-                            </button>
-                          )}
-                        </div>
+                      {currentUser?.role === 'admin' && u.id !== currentUser?.id && (
+                        <button
+                          onClick={() => deleteUser(u)}
+                          className="p-2 text-gray-400 hover:text-red-500"
+                        >
+                          🗑️
+                        </button>
                       )}
                     </div>
                   ))}
@@ -1654,7 +1525,7 @@ function App() {
             </button>
           </div>
           
-          {/* FAB Button */}
+          {/* FAB Button - SANS FOND GRIS */}
           <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50">
             <button
               onClick={() => setMenuOpen(!menuOpen)}
@@ -1887,6 +1758,7 @@ function App() {
                 <option value="admin">Administrateur</option>
               </select>
               
+              {/* Message d'erreur */}
               {memberError && (
                 <p className="text-red-500 text-sm text-center bg-red-50 p-3 rounded-xl">
                   ⚠️ {memberError}
@@ -1907,83 +1779,6 @@ function App() {
                   className="flex-1 py-3 bg-gradient-to-r from-teal-500 to-emerald-500 text-white rounded-xl font-medium"
                 >
                   {saving ? '...' : 'Ajouter'}
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
-
-      {/* === MODAL CHANGER MOT DE PASSE === */}
-      {showPasswordModal && (
-        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-          <div className="bg-white w-full max-w-sm rounded-2xl p-6">
-            <h2 className="text-lg font-bold mb-4">🔐 Modifier mon mot de passe</h2>
-            
-            <form onSubmit={handlePasswordChange} className="space-y-4">
-              <div>
-                <label className="text-sm text-gray-500 mb-1 block">Mot de passe actuel</label>
-                <input
-                  type="password"
-                  placeholder="Mot de passe actuel..."
-                  value={passwordForm.currentPassword}
-                  onChange={(e) => setPasswordForm({...passwordForm, currentPassword: e.target.value})}
-                  className="w-full p-4 bg-gray-100 rounded-xl font-medium"
-                  required
-                />
-              </div>
-              
-              <div>
-                <label className="text-sm text-gray-500 mb-1 block">Nouveau mot de passe</label>
-                <input
-                  type="password"
-                  placeholder="Nouveau mot de passe (min 8 car.)..."
-                  value={passwordForm.newPassword}
-                  onChange={(e) => setPasswordForm({...passwordForm, newPassword: e.target.value})}
-                  className="w-full p-4 bg-gray-100 rounded-xl font-medium"
-                  required
-                  minLength={8}
-                />
-              </div>
-              
-              <div>
-                <label className="text-sm text-gray-500 mb-1 block">Confirmer</label>
-                <input
-                  type="password"
-                  placeholder="Confirmer le nouveau mot de passe..."
-                  value={passwordForm.confirmPassword}
-                  onChange={(e) => setPasswordForm({...passwordForm, confirmPassword: e.target.value})}
-                  className="w-full p-4 bg-gray-100 rounded-xl font-medium"
-                  required
-                />
-              </div>
-              
-              {passwordError && (
-                <p className="text-red-500 text-sm text-center bg-red-50 p-3 rounded-xl">
-                  ⚠️ {passwordError}
-                </p>
-              )}
-              
-              {passwordSuccess && (
-                <p className="text-emerald-600 text-sm text-center bg-emerald-50 p-3 rounded-xl">
-                  ✅ {passwordSuccess}
-                </p>
-              )}
-              
-              <div className="flex gap-2">
-                <button
-                  type="button"
-                  onClick={() => { setShowPasswordModal(false); setPasswordError(''); setPasswordSuccess(''); }}
-                  className="flex-1 py-3 bg-gray-100 rounded-xl font-medium"
-                >
-                  Annuler
-                </button>
-                <button
-                  type="submit"
-                  disabled={saving}
-                  className="flex-1 py-3 bg-gradient-to-r from-teal-500 to-emerald-500 text-white rounded-xl font-medium"
-                >
-                  {saving ? '...' : 'Modifier'}
                 </button>
               </div>
             </form>
