@@ -6,6 +6,38 @@ const API_URL = '/api.php'
 // === EMOJIS DISPONIBLES ===
 const EMOJIS = ['💵', '🏦', '📦', '🚗', '💸', '🛒', '🍽️', '⛽', '📱', '💼', '🎁', '🔧', '📝', '💳', '🏠', '⚡', '💊', '🎉', '✈️', '🚌', '☕', '🍕', '👕', '📚', '🎬', '💇', '🧹', '🌿', '🥭', '➕', '➖']
 
+// === HELPERS FORMAT DATE ===
+const formatDate = (dateString) => {
+  if (!dateString) return ''
+  const date = new Date(dateString)
+  const jour = date.getDate().toString().padStart(2, '0')
+  const mois = (date.getMonth() + 1).toString().padStart(2, '0')
+  const annee = date.getFullYear()
+  return `${jour}/${mois}/${annee}`
+}
+
+const formatTime = (dateString) => {
+  if (!dateString) return ''
+  const date = new Date(dateString)
+  const heures = date.getHours().toString().padStart(2, '0')
+  const minutes = date.getMinutes().toString().padStart(2, '0')
+  return `${heures}h${minutes}`
+}
+
+const formatDateTime = (dateString) => {
+  if (!dateString) return ''
+  return `${formatDate(dateString)} à ${formatTime(dateString)}`
+}
+
+// Pour envoyer à Airtable (ISO format)
+const toAirtableDateTime = (dateStr, timeStr) => {
+  if (!dateStr) return new Date().toISOString()
+  const [year, month, day] = dateStr.split('-')
+  const [hours, minutes] = timeStr ? timeStr.split(':') : ['12', '00']
+  const date = new Date(year, month - 1, day, hours, minutes)
+  return date.toISOString()
+}
+
 function App() {
   // === ÉTATS ===
   const [activeTab, setActiveTab] = useState('mouvements')
@@ -27,9 +59,11 @@ function App() {
   
   // Formulaires
   const [newType, setNewType] = useState('sortie')
-  const [formData, setFormData] = useState({ amount: '', reason: '', user: '', category: '', note: '', date: '' })
+  const [formData, setFormData] = useState({ amount: '', reason: '', user: '', category: '', note: '', date: '', time: '' })
   const [newUserName, setNewUserName] = useState('')
   const [resetConfirm, setResetConfirm] = useState('')
+  const [resetMode, setResetMode] = useState('zero') // 'zero' ou 'montant'
+  const [resetAmount, setResetAmount] = useState('')
   const [categoryForm, setCategoryForm] = useState({ type: 'sortie', label: '', icon: '📦' })
   
   // Filtres
@@ -116,13 +150,13 @@ function App() {
     const now = new Date()
     if (filterPeriod === 'jour') {
       const today = now.toISOString().split('T')[0]
-      filtered = filtered.filter(t => t.date === today)
+      filtered = filtered.filter(t => t.date?.split('T')[0] === today)
     } else if (filterPeriod === 'semaine') {
       const weekAgo = new Date(now - 7 * 24 * 60 * 60 * 1000).toISOString().split('T')[0]
-      filtered = filtered.filter(t => t.date >= weekAgo)
+      filtered = filtered.filter(t => t.date?.split('T')[0] >= weekAgo)
     } else if (filterPeriod === 'mois') {
       const monthAgo = new Date(now - 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0]
-      filtered = filtered.filter(t => t.date >= monthAgo)
+      filtered = filtered.filter(t => t.date?.split('T')[0] >= monthAgo)
     }
     
     if (filterUser !== 'tous') {
@@ -170,20 +204,27 @@ function App() {
   const openNewTransaction = () => {
     setEditingTransaction(null)
     setNewType('sortie')
-    setFormData({ amount: '', reason: '', user: '', category: '', note: '', date: new Date().toISOString().split('T')[0] })
+    const now = new Date()
+    const dateStr = now.toISOString().split('T')[0]
+    const timeStr = now.toTimeString().slice(0, 5)
+    setFormData({ amount: '', reason: '', user: '', category: '', note: '', date: dateStr, time: timeStr })
     setShowModal(true)
   }
 
   const openEditTransaction = (t) => {
     setEditingTransaction(t)
     setNewType(t.type)
+    const dateObj = t.date ? new Date(t.date) : new Date()
+    const dateStr = dateObj.toISOString().split('T')[0]
+    const timeStr = dateObj.toTimeString().slice(0, 5)
     setFormData({
       amount: t.amount.toString(),
       reason: t.reason,
       user: t.user,
       category: t.category,
       note: t.note || '',
-      date: t.date
+      date: dateStr,
+      time: timeStr
     })
     setShowModal(true)
   }
@@ -194,13 +235,15 @@ function App() {
     
     setSaving(true)
     
+    const dateTime = toAirtableDateTime(formData.date, formData.time)
+    
     const fields = {
       Motif: formData.reason,
       Montant: parseFloat(formData.amount),
       Type: newType,
       Categorie: [formData.category],
       Utilisateur: [formData.user],
-      Date: formData.date,
+      Date: dateTime,
       Note: formData.note
     }
     
@@ -220,7 +263,7 @@ function App() {
       }
       
       await loadData()
-      setFormData({ amount: '', reason: '', user: '', category: '', note: '', date: '' })
+      setFormData({ amount: '', reason: '', user: '', category: '', note: '', date: '', time: '' })
       setEditingTransaction(null)
       setShowModal(false)
     } catch (err) {
@@ -357,6 +400,13 @@ function App() {
   }
 
   // === RESET ===
+  const openResetModal = () => {
+    setResetMode('zero')
+    setResetAmount('')
+    setResetConfirm('')
+    setShowResetModal(true)
+  }
+
   const handleReset = async () => {
     if (resetConfirm !== 'REINITIALISER') return
     
@@ -368,8 +418,38 @@ function App() {
         await fetch(`${API_URL}?table=Transactions&id=${t.id}`, { method: 'DELETE' })
       }
       
+      // Si montant de départ > 0, créer une entrée "Fond de caisse"
+      if (resetMode === 'montant' && parseFloat(resetAmount) > 0) {
+        // Chercher une catégorie d'entrée (prendre la première ou "Fond de caisse" si existe)
+        let categoryId = categories.entree[0]?.id
+        const fondCaisseCat = categories.entree.find(c => c.label.toLowerCase().includes('fond'))
+        if (fondCaisseCat) categoryId = fondCaisseCat.id
+        
+        // Chercher un utilisateur (prendre le premier)
+        const userId = team[0]?.id
+        
+        if (categoryId && userId) {
+          const fields = {
+            Motif: 'Fond de caisse initial',
+            Montant: parseFloat(resetAmount),
+            Type: 'entree',
+            Categorie: [categoryId],
+            Utilisateur: [userId],
+            Date: new Date().toISOString(),
+            Note: 'Réinitialisation avec montant de départ'
+          }
+          
+          await fetch(`${API_URL}?table=Transactions`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ fields })
+          })
+        }
+      }
+      
       await loadData()
       setResetConfirm('')
+      setResetAmount('')
       setShowResetModal(false)
     } catch (err) {
       console.error('Erreur:', err)
@@ -513,7 +593,7 @@ function App() {
                             <p className="font-medium text-gray-800 truncate">{t.reason}</p>
                             <p className="text-xs text-gray-400">{catInfo.label}</p>
                             <p className="text-xs text-gray-400 mt-1">
-                              {getUserName(t.user)} • {t.date}
+                              {getUserName(t.user)} • {formatDateTime(t.date)}
                             </p>
                             {t.note && (
                               <p className="text-xs text-gray-500 mt-1 italic">📝 {t.note}</p>
@@ -606,7 +686,7 @@ function App() {
             </div>
 
             <button
-              onClick={() => setShowResetModal(true)}
+              onClick={openResetModal}
               className="w-full py-3 bg-red-100 text-red-600 rounded-xl font-medium text-sm"
             >
               ⚠️ Réinitialiser la caisse
@@ -839,16 +919,28 @@ function App() {
                 />
               </div>
 
-              {/* Date */}
-              <div>
-                <label className="text-sm text-gray-500 mb-2 block">Date</label>
-                <input
-                  type="date"
-                  value={formData.date}
-                  onChange={(e) => setFormData({...formData, date: e.target.value})}
-                  className="w-full p-4 bg-gray-100 rounded-xl font-medium"
-                  required
-                />
+              {/* Date et Heure */}
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="text-sm text-gray-500 mb-2 block">Date</label>
+                  <input
+                    type="date"
+                    value={formData.date}
+                    onChange={(e) => setFormData({...formData, date: e.target.value})}
+                    className="w-full p-4 bg-gray-100 rounded-xl font-medium"
+                    required
+                  />
+                </div>
+                <div>
+                  <label className="text-sm text-gray-500 mb-2 block">Heure</label>
+                  <input
+                    type="time"
+                    value={formData.time}
+                    onChange={(e) => setFormData({...formData, time: e.target.value})}
+                    className="w-full p-4 bg-gray-100 rounded-xl font-medium"
+                    required
+                  />
+                </div>
               </div>
 
               {/* Utilisateur */}
@@ -1032,12 +1124,56 @@ function App() {
       {showResetModal && (
         <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
           <div className="bg-white w-full max-w-sm rounded-2xl p-6">
-            <h2 className="text-lg font-bold text-red-600 mb-2">⚠️ Réinitialisation</h2>
+            <h2 className="text-lg font-bold text-red-600 mb-4">⚠️ Réinitialiser la caisse</h2>
+            
+            {/* Choix du mode */}
+            <div className="space-y-3 mb-4">
+              <label className="flex items-center gap-3 p-3 bg-gray-50 rounded-xl cursor-pointer">
+                <input
+                  type="radio"
+                  name="resetMode"
+                  checked={resetMode === 'zero'}
+                  onChange={() => setResetMode('zero')}
+                  className="w-5 h-5 text-teal-600"
+                />
+                <div>
+                  <p className="font-medium">Remettre à zéro</p>
+                  <p className="text-xs text-gray-500">Supprimer toutes les opérations, solde = 0 €</p>
+                </div>
+              </label>
+              
+              <label className="flex items-center gap-3 p-3 bg-gray-50 rounded-xl cursor-pointer">
+                <input
+                  type="radio"
+                  name="resetMode"
+                  checked={resetMode === 'montant'}
+                  onChange={() => setResetMode('montant')}
+                  className="w-5 h-5 text-teal-600"
+                />
+                <div>
+                  <p className="font-medium">Avec un montant de départ</p>
+                  <p className="text-xs text-gray-500">Supprimer tout et démarrer avec un fond de caisse</p>
+                </div>
+              </label>
+            </div>
+
+            {/* Montant de départ si mode montant */}
+            {resetMode === 'montant' && (
+              <div className="mb-4">
+                <label className="text-sm text-gray-500 mb-2 block">Montant de départ (€)</label>
+                <input
+                  type="number"
+                  step="0.01"
+                  placeholder="Ex: 200.00"
+                  value={resetAmount}
+                  onChange={(e) => setResetAmount(e.target.value)}
+                  className="w-full p-4 bg-gray-100 rounded-xl text-xl font-bold"
+                />
+              </div>
+            )}
+
             <p className="text-sm text-gray-600 mb-4">
-              Cette action supprimera <strong>toutes les opérations</strong>. Cette action est irréversible.
-            </p>
-            <p className="text-sm text-gray-600 mb-4">
-              Tapez <strong>REINITIALISER</strong> pour confirmer :
+              Cette action est <strong>irréversible</strong>. Tapez <strong>REINITIALISER</strong> pour confirmer :
             </p>
             
             <input
@@ -1050,16 +1186,16 @@ function App() {
             
             <div className="flex gap-2">
               <button
-                onClick={() => { setShowResetModal(false); setResetConfirm(''); }}
+                onClick={() => { setShowResetModal(false); setResetConfirm(''); setResetAmount(''); }}
                 className="flex-1 py-3 bg-gray-100 rounded-xl font-medium"
               >
                 Annuler
               </button>
               <button
                 onClick={handleReset}
-                disabled={resetConfirm !== 'REINITIALISER' || saving}
+                disabled={resetConfirm !== 'REINITIALISER' || saving || (resetMode === 'montant' && !resetAmount)}
                 className={`flex-1 py-3 rounded-xl font-medium ${
-                  resetConfirm === 'REINITIALISER' && !saving
+                  resetConfirm === 'REINITIALISER' && !saving && (resetMode === 'zero' || resetAmount)
                     ? 'bg-red-600 text-white' 
                     : 'bg-gray-200 text-gray-400 cursor-not-allowed'
                 }`}

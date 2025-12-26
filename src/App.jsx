@@ -4,7 +4,7 @@ import { useState, useEffect } from 'react'
 const API_URL = '/api.php'
 
 // === EMOJIS DISPONIBLES ===
-const EMOJIS = ['💵', '🏦', '📦', '🚗', '💸', '🛒', '🍽️', '⛽', '📱', '💼', '🎁', '🔧', '📝', '💳', '🏠', '⚡', '💊', '🎉', '✈️', '🚌', '☕', '🍕', '👕', '📚', '🎬', '💇', '🧹', '🌿', '🥭', '➕', '➖']
+const EMOJIS = ['💵', '🏦', '📦', '🚗', '💸', '🛒', '🍽️', '⛽', '📱', '💼', '🎁', '🔧', '📝', '💳', '🏠', '⚡', '💊', '🎉', '✈️', '🚌', '☕', '🍕', '👕', '📚', '🎬', '💇', '🧹', '🌿', '🥭', '➕', '➖', '🏪', '🚚', '🍳']
 
 // === HELPERS FORMAT DATE ===
 const formatDate = (dateString) => {
@@ -29,7 +29,6 @@ const formatDateTime = (dateString) => {
   return `${formatDate(dateString)} à ${formatTime(dateString)}`
 }
 
-// Pour envoyer à Airtable (ISO format)
 const toAirtableDateTime = (dateStr, timeStr) => {
   if (!dateStr) return new Date().toISOString()
   const [year, month, day] = dateStr.split('-')
@@ -39,62 +38,141 @@ const toAirtableDateTime = (dateStr, timeStr) => {
 }
 
 function App() {
-  // === ÉTATS ===
+  // === ÉTATS AUTH ===
+  const [isLoggedIn, setIsLoggedIn] = useState(false)
+  const [currentUser, setCurrentUser] = useState(null)
+  const [setupComplete, setSetupComplete] = useState(true)
+  const [showSetup, setShowSetup] = useState(false)
+  const [authLoading, setAuthLoading] = useState(true)
+  
+  // === ÉTATS APP ===
   const [activeTab, setActiveTab] = useState('mouvements')
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   
+  // === DONNÉES ===
+  const [caisses, setCaisses] = useState([])
+  const [currentCaisse, setCurrentCaisse] = useState(null)
   const [categories, setCategories] = useState({ entree: [], sortie: [] })
   const [transactions, setTransactions] = useState([])
   const [team, setTeam] = useState([])
   
-  // Modals
+  // === MODALS ===
   const [showModal, setShowModal] = useState(false)
   const [showUserModal, setShowUserModal] = useState(false)
   const [showResetModal, setShowResetModal] = useState(false)
   const [showCategoryModal, setShowCategoryModal] = useState(false)
+  const [showCaisseModal, setShowCaisseModal] = useState(false)
   const [editingUser, setEditingUser] = useState(null)
   const [editingTransaction, setEditingTransaction] = useState(null)
   const [editingCategory, setEditingCategory] = useState(null)
+  const [editingCaisse, setEditingCaisse] = useState(null)
   
-  // Formulaires
+  // === FORMULAIRES ===
+  const [loginForm, setLoginForm] = useState({ email: '', password: '' })
+  const [setupForm, setSetupForm] = useState({ nom: '', email: '', password: '', confirmPassword: '' })
+  const [setupKey, setSetupKey] = useState('')
   const [newType, setNewType] = useState('sortie')
   const [formData, setFormData] = useState({ amount: '', reason: '', user: '', category: '', note: '', date: '', time: '' })
-  const [newUserName, setNewUserName] = useState('')
+  const [newMemberForm, setNewMemberForm] = useState({ nom: '', email: '', password: '', role: 'membre' })
   const [resetConfirm, setResetConfirm] = useState('')
-  const [resetMode, setResetMode] = useState('zero') // 'zero' ou 'montant'
+  const [resetMode, setResetMode] = useState('zero')
   const [resetAmount, setResetAmount] = useState('')
   const [categoryForm, setCategoryForm] = useState({ type: 'sortie', label: '', icon: '📦' })
+  const [caisseForm, setCaisseForm] = useState({ nom: '', description: '', icon: '💰' })
   
-  // Filtres
+  // === FILTRES ===
   const [filterPeriod, setFilterPeriod] = useState('tout')
   const [filterUser, setFilterUser] = useState('tous')
   const [searchQuery, setSearchQuery] = useState('')
+  const [loginError, setLoginError] = useState('')
+  const [setupError, setSetupError] = useState('')
 
-  // === CHARGEMENT INITIAL ===
+  // === VÉRIFICATION AUTH AU DÉMARRAGE ===
   useEffect(() => {
-    loadData()
+    checkAuth()
   }, [])
+
+  const checkAuth = async () => {
+    setAuthLoading(true)
+    
+    // Vérifier si setup nécessaire
+    try {
+      const res = await fetch(`${API_URL}?action=check_setup`)
+      const data = await res.json()
+      setSetupComplete(data.setupComplete)
+      
+      if (!data.setupComplete) {
+        // Vérifier si clé dans URL
+        const urlParams = new URLSearchParams(window.location.search)
+        const key = urlParams.get('key')
+        if (key) {
+          setSetupKey(key)
+          setShowSetup(true)
+        }
+      }
+    } catch (err) {
+      console.error('Erreur check setup:', err)
+    }
+    
+    // Vérifier si déjà connecté
+    const savedUser = localStorage.getItem('manrina_user')
+    const savedToken = localStorage.getItem('manrina_token')
+    
+    if (savedUser && savedToken) {
+      setCurrentUser(JSON.parse(savedUser))
+      setIsLoggedIn(true)
+    }
+    
+    setAuthLoading(false)
+  }
+
+  // === CHARGEMENT DONNÉES ===
+  useEffect(() => {
+    if (isLoggedIn) {
+      loadData()
+    }
+  }, [isLoggedIn, currentCaisse])
 
   const loadData = async () => {
     setLoading(true)
     try {
-      const [teamRes, catRes, transRes] = await Promise.all([
+      const [teamRes, catRes, transRes, caissesRes] = await Promise.all([
         fetch(`${API_URL}?table=Equipe`),
         fetch(`${API_URL}?table=Categories`),
-        fetch(`${API_URL}?table=Transactions&sort_field=Date&sort_direction=desc`)
+        fetch(`${API_URL}?table=Transactions&sort_field=Date&sort_direction=desc`),
+        fetch(`${API_URL}?table=Caisses`)
       ])
       
       const teamData = await teamRes.json()
       const catData = await catRes.json()
       const transData = await transRes.json()
+      const caissesData = await caissesRes.json()
       
       // Équipe
       if (teamData.records) {
         setTeam(teamData.records.map(r => ({
           id: r.id,
-          name: r.fields.Nom || ''
+          name: r.fields.Nom || '',
+          email: r.fields.Email || '',
+          role: r.fields.Role || 'membre'
         })))
+      }
+      
+      // Caisses
+      if (caissesData.records) {
+        const loadedCaisses = caissesData.records.map(r => ({
+          id: r.id,
+          nom: r.fields.Nom || '',
+          description: r.fields.Description || '',
+          icon: r.fields.Icon || '💰'
+        }))
+        setCaisses(loadedCaisses)
+        
+        // Sélectionner la première caisse par défaut
+        if (!currentCaisse && loadedCaisses.length > 0) {
+          setCurrentCaisse(loadedCaisses[0].id)
+        }
       }
       
       // Catégories
@@ -117,19 +195,101 @@ function App() {
           id: r.id,
           type: r.fields.Type || 'sortie',
           category: r.fields.Categorie?.[0] || '',
-          categoryName: '',
           amount: r.fields.Montant || 0,
           reason: r.fields.Motif || '',
           user: r.fields.Utilisateur?.[0] || '',
-          userName: '',
           date: r.fields.Date || '',
-          note: r.fields.Note || ''
+          note: r.fields.Note || '',
+          caisse: r.fields.Caisse?.[0] || ''
         })))
       }
     } catch (err) {
       console.error('Erreur chargement:', err)
     }
     setLoading(false)
+  }
+
+  // === AUTHENTIFICATION ===
+  const handleLogin = async (e) => {
+    e.preventDefault()
+    setLoginError('')
+    setSaving(true)
+    
+    try {
+      const res = await fetch(`${API_URL}?action=login`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(loginForm)
+      })
+      
+      const data = await res.json()
+      
+      if (data.success) {
+        localStorage.setItem('manrina_user', JSON.stringify(data.user))
+        localStorage.setItem('manrina_token', data.token)
+        setCurrentUser(data.user)
+        setIsLoggedIn(true)
+        setLoginForm({ email: '', password: '' })
+      } else {
+        setLoginError(data.error || 'Erreur de connexion')
+      }
+    } catch (err) {
+      setLoginError('Erreur de connexion')
+    }
+    
+    setSaving(false)
+  }
+
+  const handleSetup = async (e) => {
+    e.preventDefault()
+    setSetupError('')
+    
+    if (setupForm.password !== setupForm.confirmPassword) {
+      setSetupError('Les mots de passe ne correspondent pas')
+      return
+    }
+    
+    if (setupForm.password.length < 8) {
+      setSetupError('Le mot de passe doit contenir au moins 8 caractères')
+      return
+    }
+    
+    setSaving(true)
+    
+    try {
+      const res = await fetch(`${API_URL}?action=setup&key=${setupKey}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          nom: setupForm.nom,
+          email: setupForm.email,
+          password: setupForm.password
+        })
+      })
+      
+      const data = await res.json()
+      
+      if (data.success) {
+        setSetupComplete(true)
+        setShowSetup(false)
+        // Nettoyer l'URL
+        window.history.replaceState({}, document.title, window.location.pathname)
+        alert('Compte administrateur créé ! Vous pouvez maintenant vous connecter.')
+      } else {
+        setSetupError(data.error || 'Erreur lors du setup')
+      }
+    } catch (err) {
+      setSetupError('Erreur lors du setup')
+    }
+    
+    setSaving(false)
+  }
+
+  const handleLogout = () => {
+    localStorage.removeItem('manrina_user')
+    localStorage.removeItem('manrina_token')
+    setCurrentUser(null)
+    setIsLoggedIn(false)
   }
 
   // === HELPERS ===
@@ -143,9 +303,19 @@ function App() {
     return cat || { label: '', icon: '💰' }
   }
 
+  const getCaisseName = (caisseId) => {
+    const caisse = caisses.find(c => c.id === caisseId)
+    return caisse ? `${caisse.icon} ${caisse.nom}` : ''
+  }
+
   // === CALCULS ===
+  const getTransactionsForCurrentCaisse = () => {
+    if (!currentCaisse) return transactions
+    return transactions.filter(t => t.caisse === currentCaisse)
+  }
+
   const filterTransactions = () => {
-    let filtered = [...transactions]
+    let filtered = getTransactionsForCurrentCaisse()
     
     const now = new Date()
     if (filterPeriod === 'jour') {
@@ -176,10 +346,11 @@ function App() {
   }
 
   const filteredTransactions = filterTransactions()
+  const currentCaisseTransactions = getTransactionsForCurrentCaisse()
   
   const totalEntrees = filteredTransactions.filter(t => t.type === 'entree').reduce((sum, t) => sum + t.amount, 0)
   const totalSorties = filteredTransactions.filter(t => t.type === 'sortie').reduce((sum, t) => sum + t.amount, 0)
-  const soldeActuel = transactions.filter(t => t.type === 'entree').reduce((sum, t) => sum + t.amount, 0) - transactions.filter(t => t.type === 'sortie').reduce((sum, t) => sum + t.amount, 0)
+  const soldeActuel = currentCaisseTransactions.filter(t => t.type === 'entree').reduce((sum, t) => sum + t.amount, 0) - currentCaisseTransactions.filter(t => t.type === 'sortie').reduce((sum, t) => sum + t.amount, 0)
 
   const getStatsByCategory = (type) => {
     const cats = categories[type]
@@ -207,7 +378,7 @@ function App() {
     const now = new Date()
     const dateStr = now.toISOString().split('T')[0]
     const timeStr = now.toTimeString().slice(0, 5)
-    setFormData({ amount: '', reason: '', user: '', category: '', note: '', date: dateStr, time: timeStr })
+    setFormData({ amount: '', reason: '', user: currentUser?.id || '', category: '', note: '', date: dateStr, time: timeStr })
     setShowModal(true)
   }
 
@@ -231,7 +402,7 @@ function App() {
 
   const handleSubmit = async (e) => {
     e.preventDefault()
-    if (!formData.amount || !formData.reason || !formData.user || !formData.category) return
+    if (!formData.amount || !formData.reason || !formData.user || !formData.category || !currentCaisse) return
     
     setSaving(true)
     
@@ -244,7 +415,8 @@ function App() {
       Categorie: [formData.category],
       Utilisateur: [formData.user],
       Date: dateTime,
-      Note: formData.note
+      Note: formData.note,
+      Caisse: [currentCaisse]
     }
     
     try {
@@ -285,32 +457,104 @@ function App() {
     }
   }
 
-  // === ACTIONS UTILISATEURS ===
-  const handleUserSubmit = async (e) => {
+  // === ACTIONS MEMBRES ===
+  const openNewMember = () => {
+    setEditingUser(null)
+    setNewMemberForm({ nom: '', email: '', password: '', role: 'membre' })
+    setShowUserModal(true)
+  }
+
+  const handleMemberSubmit = async (e) => {
     e.preventDefault()
-    if (!newUserName.trim()) return
+    if (!newMemberForm.nom || !newMemberForm.email || !newMemberForm.password) return
     
     setSaving(true)
     
     try {
-      if (editingUser) {
-        await fetch(`${API_URL}?table=Equipe&id=${editingUser.id}`, {
+      await fetch(`${API_URL}?action=create_member`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(newMemberForm)
+      })
+      
+      await loadData()
+      setNewMemberForm({ nom: '', email: '', password: '', role: 'membre' })
+      setShowUserModal(false)
+    } catch (err) {
+      console.error('Erreur:', err)
+      alert('Erreur lors de la création')
+    }
+    
+    setSaving(false)
+  }
+
+  const deleteUser = async (user) => {
+    // Vérifier si c'est le dernier admin
+    const admins = team.filter(u => u.role === 'admin')
+    if (user.role === 'admin' && admins.length <= 1) {
+      alert('Impossible : vous devez garder au moins un administrateur')
+      return
+    }
+    
+    if (transactions.some(t => t.user === user.id)) {
+      alert('Impossible : cet utilisateur a des opérations enregistrées')
+      return
+    }
+    
+    if (!confirm(`Supprimer ${user.name} ?`)) return
+    
+    try {
+      await fetch(`${API_URL}?table=Equipe&id=${user.id}`, { method: 'DELETE' })
+      await loadData()
+    } catch (err) {
+      console.error('Erreur:', err)
+    }
+  }
+
+  // === ACTIONS CAISSES ===
+  const openNewCaisse = () => {
+    setEditingCaisse(null)
+    setCaisseForm({ nom: '', description: '', icon: '💰' })
+    setShowCaisseModal(true)
+  }
+
+  const openEditCaisse = (caisse) => {
+    setEditingCaisse(caisse)
+    setCaisseForm({ nom: caisse.nom, description: caisse.description, icon: caisse.icon })
+    setShowCaisseModal(true)
+  }
+
+  const handleCaisseSubmit = async (e) => {
+    e.preventDefault()
+    if (!caisseForm.nom) return
+    
+    setSaving(true)
+    
+    const fields = {
+      Nom: caisseForm.nom,
+      Description: caisseForm.description,
+      Icon: caisseForm.icon
+    }
+    
+    try {
+      if (editingCaisse) {
+        await fetch(`${API_URL}?table=Caisses&id=${editingCaisse.id}`, {
           method: 'PATCH',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ fields: { Nom: newUserName } })
+          body: JSON.stringify({ fields })
         })
       } else {
-        await fetch(`${API_URL}?table=Equipe`, {
+        await fetch(`${API_URL}?table=Caisses`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ fields: { Nom: newUserName } })
+          body: JSON.stringify({ fields })
         })
       }
       
       await loadData()
-      setNewUserName('')
-      setEditingUser(null)
-      setShowUserModal(false)
+      setCaisseForm({ nom: '', description: '', icon: '💰' })
+      setEditingCaisse(null)
+      setShowCaisseModal(false)
     } catch (err) {
       console.error('Erreur:', err)
     }
@@ -318,15 +562,18 @@ function App() {
     setSaving(false)
   }
 
-  const deleteUser = async (user) => {
-    if (transactions.some(t => t.user === user.id)) {
-      alert('Impossible : cet utilisateur a des opérations enregistrées')
+  const deleteCaisse = async (caisse) => {
+    if (transactions.some(t => t.caisse === caisse.id)) {
+      alert('Impossible : cette caisse a des opérations enregistrées')
       return
     }
-    if (!confirm(`Supprimer ${user.name} ?`)) return
+    if (!confirm(`Supprimer la caisse "${caisse.nom}" ?`)) return
     
     try {
-      await fetch(`${API_URL}?table=Equipe&id=${user.id}`, { method: 'DELETE' })
+      await fetch(`${API_URL}?table=Caisses&id=${caisse.id}`, { method: 'DELETE' })
+      if (currentCaisse === caisse.id) {
+        setCurrentCaisse(null)
+      }
       await loadData()
     } catch (err) {
       console.error('Erreur:', err)
@@ -413,22 +660,21 @@ function App() {
     setSaving(true)
     
     try {
-      // Supprimer toutes les transactions une par une
-      for (const t of transactions) {
+      // Supprimer les transactions de la caisse actuelle
+      const toDelete = transactions.filter(t => t.caisse === currentCaisse)
+      for (const t of toDelete) {
         await fetch(`${API_URL}?table=Transactions&id=${t.id}`, { method: 'DELETE' })
       }
       
-      // Si montant de départ > 0, créer une entrée "Fond de caisse"
+      // Si montant de départ
       if (resetMode === 'montant' && parseFloat(resetAmount) > 0) {
-        // Chercher une catégorie d'entrée (prendre la première ou "Fond de caisse" si existe)
         let categoryId = categories.entree[0]?.id
         const fondCaisseCat = categories.entree.find(c => c.label.toLowerCase().includes('fond'))
         if (fondCaisseCat) categoryId = fondCaisseCat.id
         
-        // Chercher un utilisateur (prendre le premier)
-        const userId = team[0]?.id
+        const userId = currentUser?.id || team[0]?.id
         
-        if (categoryId && userId) {
+        if (categoryId && userId && currentCaisse) {
           const fields = {
             Motif: 'Fond de caisse initial',
             Montant: parseFloat(resetAmount),
@@ -436,7 +682,8 @@ function App() {
             Categorie: [categoryId],
             Utilisateur: [userId],
             Date: new Date().toISOString(),
-            Note: 'Réinitialisation avec montant de départ'
+            Note: 'Réinitialisation avec montant de départ',
+            Caisse: [currentCaisse]
           }
           
           await fetch(`${API_URL}?table=Transactions`, {
@@ -459,6 +706,143 @@ function App() {
   }
 
   // === LOADING SCREEN ===
+  if (authLoading) {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-emerald-500 via-teal-500 to-cyan-600 flex items-center justify-center">
+        <div className="text-center text-white">
+          <div className="text-4xl mb-4">🥭</div>
+          <p className="text-lg font-medium">Chargement...</p>
+        </div>
+      </div>
+    )
+  }
+
+  // === PAGE SETUP ===
+  if (!setupComplete && showSetup) {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-emerald-500 via-teal-500 to-cyan-600 flex items-center justify-center p-4">
+        <div className="bg-white w-full max-w-md rounded-2xl p-6 shadow-xl">
+          <div className="text-center mb-6">
+            <div className="text-4xl mb-2">🥭</div>
+            <h1 className="text-xl font-bold text-gray-800">Configuration initiale</h1>
+            <p className="text-sm text-gray-500">Créez votre compte administrateur</p>
+          </div>
+          
+          <form onSubmit={handleSetup} className="space-y-4">
+            <div>
+              <label className="text-sm text-gray-500 mb-1 block">Nom</label>
+              <input
+                type="text"
+                value={setupForm.nom}
+                onChange={(e) => setSetupForm({...setupForm, nom: e.target.value})}
+                className="w-full p-3 bg-gray-100 rounded-xl"
+                required
+              />
+            </div>
+            
+            <div>
+              <label className="text-sm text-gray-500 mb-1 block">Email</label>
+              <input
+                type="email"
+                value={setupForm.email}
+                onChange={(e) => setSetupForm({...setupForm, email: e.target.value})}
+                className="w-full p-3 bg-gray-100 rounded-xl"
+                required
+              />
+            </div>
+            
+            <div>
+              <label className="text-sm text-gray-500 mb-1 block">Mot de passe</label>
+              <input
+                type="password"
+                value={setupForm.password}
+                onChange={(e) => setSetupForm({...setupForm, password: e.target.value})}
+                className="w-full p-3 bg-gray-100 rounded-xl"
+                required
+                minLength={8}
+              />
+            </div>
+            
+            <div>
+              <label className="text-sm text-gray-500 mb-1 block">Confirmer mot de passe</label>
+              <input
+                type="password"
+                value={setupForm.confirmPassword}
+                onChange={(e) => setSetupForm({...setupForm, confirmPassword: e.target.value})}
+                className="w-full p-3 bg-gray-100 rounded-xl"
+                required
+              />
+            </div>
+            
+            {setupError && (
+              <p className="text-red-500 text-sm text-center">{setupError}</p>
+            )}
+            
+            <button
+              type="submit"
+              disabled={saving}
+              className="w-full py-3 bg-teal-600 text-white rounded-xl font-bold"
+            >
+              {saving ? 'Création...' : 'Créer le compte admin'}
+            </button>
+          </form>
+        </div>
+      </div>
+    )
+  }
+
+  // === PAGE LOGIN ===
+  if (!isLoggedIn) {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-emerald-500 via-teal-500 to-cyan-600 flex items-center justify-center p-4">
+        <div className="bg-white w-full max-w-md rounded-2xl p-6 shadow-xl">
+          <div className="text-center mb-6">
+            <div className="text-4xl mb-2">🥭</div>
+            <h1 className="text-xl font-bold text-gray-800">Caisse Manrina</h1>
+            <p className="text-sm text-gray-500">Connectez-vous pour continuer</p>
+          </div>
+          
+          <form onSubmit={handleLogin} className="space-y-4">
+            <div>
+              <label className="text-sm text-gray-500 mb-1 block">Email</label>
+              <input
+                type="email"
+                value={loginForm.email}
+                onChange={(e) => setLoginForm({...loginForm, email: e.target.value})}
+                className="w-full p-3 bg-gray-100 rounded-xl"
+                required
+              />
+            </div>
+            
+            <div>
+              <label className="text-sm text-gray-500 mb-1 block">Mot de passe</label>
+              <input
+                type="password"
+                value={loginForm.password}
+                onChange={(e) => setLoginForm({...loginForm, password: e.target.value})}
+                className="w-full p-3 bg-gray-100 rounded-xl"
+                required
+              />
+            </div>
+            
+            {loginError && (
+              <p className="text-red-500 text-sm text-center">{loginError}</p>
+            )}
+            
+            <button
+              type="submit"
+              disabled={saving}
+              className="w-full py-3 bg-teal-600 text-white rounded-xl font-bold"
+            >
+              {saving ? 'Connexion...' : 'Se connecter'}
+            </button>
+          </form>
+        </div>
+      </div>
+    )
+  }
+
+  // === APP PRINCIPALE ===
   if (loading) {
     return (
       <div className="min-h-screen bg-gradient-to-br from-emerald-500 via-teal-500 to-cyan-600 flex items-center justify-center">
@@ -470,22 +854,45 @@ function App() {
     )
   }
 
-  // === RENDU ===
   return (
     <div className="min-h-screen bg-gradient-to-br from-emerald-500 via-teal-500 to-cyan-600">
       {/* Header */}
       <header className="bg-white/10 backdrop-blur-md border-b border-white/20 p-4 sticky top-0 z-10">
         <div className="max-w-lg mx-auto">
-          <div className="flex items-center justify-between mb-4">
+          {/* Ligne 1: Logo + User */}
+          <div className="flex items-center justify-between mb-3">
             <div className="flex items-center gap-3">
               <div className="w-10 h-10 bg-white rounded-xl flex items-center justify-center text-xl">🥭</div>
               <div>
                 <h1 className="text-lg font-bold text-white">Caisse Manrina</h1>
-                <p className="text-xs text-white/70">Gestion des flux</p>
+                <p className="text-xs text-white/70">{currentUser?.nom} ({currentUser?.role})</p>
               </div>
             </div>
-            <div className="text-right">
-              <p className="text-xs text-white/70">Solde actuel</p>
+            <button
+              onClick={handleLogout}
+              className="px-3 py-1 bg-white/20 text-white text-sm rounded-lg"
+            >
+              Déconnexion
+            </button>
+          </div>
+          
+          {/* Ligne 2: Sélecteur de caisse + Solde */}
+          <div className="flex items-center justify-between mb-3 bg-white/10 rounded-xl p-3">
+            <div className="flex-1">
+              <p className="text-xs text-white/70 mb-1">Caisse active</p>
+              <select
+                value={currentCaisse || ''}
+                onChange={(e) => setCurrentCaisse(e.target.value)}
+                className="w-full bg-transparent text-white font-medium text-sm border-none outline-none"
+              >
+                <option value="" className="text-gray-800">Sélectionner...</option>
+                {caisses.map(c => (
+                  <option key={c.id} value={c.id} className="text-gray-800">{c.icon} {c.nom}</option>
+                ))}
+              </select>
+            </div>
+            <div className="text-right pl-4 border-l border-white/20">
+              <p className="text-xs text-white/70">Solde</p>
               <p className={`text-xl font-bold ${soldeActuel >= 0 ? 'text-white' : 'text-red-200'}`}>
                 {soldeActuel.toFixed(2)} €
               </p>
@@ -498,7 +905,7 @@ function App() {
               { id: 'mouvements', label: '📋 Opérations' },
               { id: 'resume', label: '📊 Résumé' },
               { id: 'equipe', label: '👥 Équipe' },
-              { id: 'categories', label: '🏷️ Catégories' },
+              { id: 'parametres', label: '⚙️ Paramètres' },
             ].map(tab => (
               <button
                 key={tab.id}
@@ -518,8 +925,21 @@ function App() {
 
       <main className="max-w-lg mx-auto p-4 pb-24">
         
+        {/* Message si pas de caisse */}
+        {caisses.length === 0 && (
+          <div className="bg-white rounded-2xl p-6 text-center mb-4">
+            <p className="text-gray-600 mb-4">Commencez par créer une caisse</p>
+            <button
+              onClick={openNewCaisse}
+              className="px-4 py-2 bg-teal-600 text-white rounded-xl font-medium"
+            >
+              + Créer une caisse
+            </button>
+          </div>
+        )}
+
         {/* === ONGLET MOUVEMENTS === */}
-        {activeTab === 'mouvements' && (
+        {activeTab === 'mouvements' && currentCaisse && (
           <div className="space-y-4">
             {/* Filtres */}
             <div className="bg-white/10 backdrop-blur-md rounded-2xl p-4 space-y-3">
@@ -685,12 +1105,14 @@ function App() {
               )}
             </div>
 
-            <button
-              onClick={openResetModal}
-              className="w-full py-3 bg-red-100 text-red-600 rounded-xl font-medium text-sm"
-            >
-              ⚠️ Réinitialiser la caisse
-            </button>
+            {currentCaisse && (
+              <button
+                onClick={openResetModal}
+                className="w-full py-3 bg-red-100 text-red-600 rounded-xl font-medium text-sm"
+              >
+                ⚠️ Réinitialiser cette caisse
+              </button>
+            )}
           </div>
         )}
 
@@ -700,12 +1122,14 @@ function App() {
             <div className="bg-white rounded-2xl p-4 shadow-lg">
               <div className="flex justify-between items-center mb-4">
                 <h3 className="font-bold text-gray-800">👥 Équipe</h3>
-                <button
-                  onClick={() => { setEditingUser(null); setNewUserName(''); setShowUserModal(true); }}
-                  className="px-3 py-1 bg-teal-100 text-teal-700 rounded-lg text-sm font-medium"
-                >
-                  + Ajouter
-                </button>
+                {currentUser?.role === 'admin' && (
+                  <button
+                    onClick={openNewMember}
+                    className="px-3 py-1 bg-teal-100 text-teal-700 rounded-lg text-sm font-medium"
+                  >
+                    + Ajouter
+                  </button>
+                )}
               </div>
               
               {team.length === 0 ? (
@@ -718,17 +1142,64 @@ function App() {
                         <div className="w-10 h-10 bg-gradient-to-br from-emerald-400 to-teal-500 rounded-xl flex items-center justify-center text-white font-bold">
                           {u.name[0]?.toUpperCase() || '?'}
                         </div>
-                        <span className="font-medium">{u.name}</span>
+                        <div>
+                          <span className="font-medium">{u.name}</span>
+                          <p className="text-xs text-gray-400">{u.email} • {u.role}</p>
+                        </div>
+                      </div>
+                      {currentUser?.role === 'admin' && u.id !== currentUser?.id && (
+                        <button
+                          onClick={() => deleteUser(u)}
+                          className="p-2 text-gray-400 hover:text-red-500"
+                        >
+                          🗑️
+                        </button>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* === ONGLET PARAMÈTRES === */}
+        {activeTab === 'parametres' && (
+          <div className="space-y-4">
+            {/* Caisses */}
+            <div className="bg-white rounded-2xl p-4 shadow-lg">
+              <div className="flex justify-between items-center mb-4">
+                <h3 className="font-bold text-gray-800">💰 Caisses</h3>
+                <button
+                  onClick={openNewCaisse}
+                  className="px-3 py-1 bg-teal-100 text-teal-700 rounded-lg text-sm font-medium"
+                >
+                  + Ajouter
+                </button>
+              </div>
+              
+              {caisses.length === 0 ? (
+                <p className="text-gray-400 text-sm text-center py-4">Aucune caisse</p>
+              ) : (
+                <div className="space-y-2">
+                  {caisses.map(c => (
+                    <div key={c.id} className="flex justify-between items-center p-3 bg-gray-50 rounded-xl">
+                      <div className="flex items-center gap-3">
+                        <span className="text-2xl">{c.icon}</span>
+                        <div>
+                          <p className="font-medium">{c.nom}</p>
+                          {c.description && <p className="text-xs text-gray-400">{c.description}</p>}
+                        </div>
                       </div>
                       <div className="flex gap-2">
                         <button
-                          onClick={() => { setEditingUser(u); setNewUserName(u.name); setShowUserModal(true); }}
+                          onClick={() => openEditCaisse(c)}
                           className="p-2 text-gray-400 hover:text-teal-600"
                         >
                           ✏️
                         </button>
                         <button
-                          onClick={() => deleteUser(u)}
+                          onClick={() => deleteCaisse(c)}
                           className="p-2 text-gray-400 hover:text-red-500"
                         >
                           🗑️
@@ -739,12 +1210,7 @@ function App() {
                 </div>
               )}
             </div>
-          </div>
-        )}
 
-        {/* === ONGLET CATÉGORIES === */}
-        {activeTab === 'categories' && (
-          <div className="space-y-4">
             {/* Catégories Entrées */}
             <div className="bg-white rounded-2xl p-4 shadow-lg">
               <div className="flex justify-between items-center mb-4">
@@ -833,7 +1299,7 @@ function App() {
       </main>
 
       {/* Bouton Ajouter (fixe) */}
-      {activeTab === 'mouvements' && (
+      {activeTab === 'mouvements' && currentCaisse && (
         <div className="fixed bottom-6 left-0 right-0 flex justify-center">
           <button 
             onClick={openNewTransaction}
@@ -883,7 +1349,7 @@ function App() {
                 <label className="text-sm text-gray-500 mb-2 block">Catégorie</label>
                 {categories[newType].length === 0 ? (
                   <p className="text-gray-400 text-sm p-4 bg-gray-100 rounded-xl">
-                    Aucune catégorie. <button type="button" onClick={() => { setShowModal(false); setActiveTab('categories'); }} className="text-teal-600 underline">Créer une catégorie</button>
+                    Aucune catégorie. <button type="button" onClick={() => { setShowModal(false); setActiveTab('parametres'); }} className="text-teal-600 underline">Créer une catégorie</button>
                   </p>
                 ) : (
                   <div className="grid grid-cols-2 gap-2">
@@ -946,23 +1412,17 @@ function App() {
               {/* Utilisateur */}
               <div>
                 <label className="text-sm text-gray-500 mb-2 block">Opéré par</label>
-                {team.length === 0 ? (
-                  <p className="text-gray-400 text-sm p-4 bg-gray-100 rounded-xl">
-                    Aucun membre. <button type="button" onClick={() => { setShowModal(false); setActiveTab('equipe'); }} className="text-teal-600 underline">Ajouter un membre</button>
-                  </p>
-                ) : (
-                  <select
-                    value={formData.user}
-                    onChange={(e) => setFormData({...formData, user: e.target.value})}
-                    className="w-full p-4 bg-gray-100 rounded-xl font-medium"
-                    required
-                  >
-                    <option value="">Sélectionner...</option>
-                    {team.map(u => (
-                      <option key={u.id} value={u.id}>{u.name}</option>
-                    ))}
-                  </select>
-                )}
+                <select
+                  value={formData.user}
+                  onChange={(e) => setFormData({...formData, user: e.target.value})}
+                  className="w-full p-4 bg-gray-100 rounded-xl font-medium"
+                  required
+                >
+                  <option value="">Sélectionner...</option>
+                  {team.map(u => (
+                    <option key={u.id} value={u.id}>{u.name}</option>
+                  ))}
+                </select>
               </div>
 
               {/* Motif */}
@@ -1000,31 +1460,55 @@ function App() {
                     : newType === 'entree' ? 'bg-emerald-600 hover:bg-emerald-700' : 'bg-red-600 hover:bg-red-700'
                 }`}
               >
-                {saving ? 'Enregistrement...' : editingTransaction ? 'Enregistrer les modifications' : 'Valider l\'opération'}
+                {saving ? 'Enregistrement...' : editingTransaction ? 'Enregistrer' : 'Valider'}
               </button>
             </form>
           </div>
         </div>
       )}
 
-      {/* === MODAL UTILISATEUR === */}
+      {/* === MODAL MEMBRE === */}
       {showUserModal && (
         <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
           <div className="bg-white w-full max-w-sm rounded-2xl p-6">
-            <h2 className="text-lg font-bold mb-4">
-              {editingUser ? 'Modifier utilisateur' : 'Nouvel utilisateur'}
-            </h2>
+            <h2 className="text-lg font-bold mb-4">Nouveau membre</h2>
             
-            <form onSubmit={handleUserSubmit} className="space-y-4">
+            <form onSubmit={handleMemberSubmit} className="space-y-4">
               <input
                 type="text"
                 placeholder="Nom..."
-                value={newUserName}
-                onChange={(e) => setNewUserName(e.target.value)}
+                value={newMemberForm.nom}
+                onChange={(e) => setNewMemberForm({...newMemberForm, nom: e.target.value})}
                 className="w-full p-4 bg-gray-100 rounded-xl font-medium"
                 required
-                autoFocus
               />
+              
+              <input
+                type="email"
+                placeholder="Email..."
+                value={newMemberForm.email}
+                onChange={(e) => setNewMemberForm({...newMemberForm, email: e.target.value})}
+                className="w-full p-4 bg-gray-100 rounded-xl font-medium"
+                required
+              />
+              
+              <input
+                type="password"
+                placeholder="Mot de passe..."
+                value={newMemberForm.password}
+                onChange={(e) => setNewMemberForm({...newMemberForm, password: e.target.value})}
+                className="w-full p-4 bg-gray-100 rounded-xl font-medium"
+                required
+              />
+              
+              <select
+                value={newMemberForm.role}
+                onChange={(e) => setNewMemberForm({...newMemberForm, role: e.target.value})}
+                className="w-full p-4 bg-gray-100 rounded-xl font-medium"
+              >
+                <option value="membre">Membre</option>
+                <option value="admin">Administrateur</option>
+              </select>
               
               <div className="flex gap-2">
                 <button
@@ -1039,7 +1523,85 @@ function App() {
                   disabled={saving}
                   className="flex-1 py-3 bg-teal-600 text-white rounded-xl font-medium"
                 >
-                  {saving ? '...' : editingUser ? 'Modifier' : 'Ajouter'}
+                  {saving ? '...' : 'Ajouter'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* === MODAL CAISSE === */}
+      {showCaisseModal && (
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+          <div className="bg-white w-full max-w-sm rounded-2xl p-6">
+            <h2 className="text-lg font-bold mb-4">
+              {editingCaisse ? 'Modifier la caisse' : 'Nouvelle caisse'}
+            </h2>
+            
+            <form onSubmit={handleCaisseSubmit} className="space-y-4">
+              <div>
+                <label className="text-sm text-gray-500 mb-2 block">Nom</label>
+                <input
+                  type="text"
+                  placeholder="Ex: Marché Triple 8..."
+                  value={caisseForm.nom}
+                  onChange={(e) => setCaisseForm({...caisseForm, nom: e.target.value})}
+                  className="w-full p-4 bg-gray-100 rounded-xl font-medium"
+                  required
+                />
+              </div>
+              
+              <div>
+                <label className="text-sm text-gray-500 mb-2 block">Description (optionnel)</label>
+                <input
+                  type="text"
+                  placeholder="Description..."
+                  value={caisseForm.description}
+                  onChange={(e) => setCaisseForm({...caisseForm, description: e.target.value})}
+                  className="w-full p-4 bg-gray-100 rounded-xl font-medium"
+                />
+              </div>
+
+              <div>
+                <label className="text-sm text-gray-500 mb-2 block">Icône</label>
+                <div className="flex flex-wrap gap-2 p-3 bg-gray-100 rounded-xl max-h-32 overflow-y-auto">
+                  {EMOJIS.map(emoji => (
+                    <button
+                      key={emoji}
+                      type="button"
+                      onClick={() => setCaisseForm({...caisseForm, icon: emoji})}
+                      className={`w-10 h-10 text-xl rounded-lg transition-all ${
+                        caisseForm.icon === emoji 
+                          ? 'bg-teal-500 scale-110' 
+                          : 'bg-white hover:bg-gray-200'
+                      }`}
+                    >
+                      {emoji}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div className="p-4 bg-gray-50 rounded-xl flex items-center gap-3">
+                <span className="text-2xl">{caisseForm.icon}</span>
+                <span className="font-medium">{caisseForm.nom || 'Aperçu'}</span>
+              </div>
+              
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  onClick={() => { setShowCaisseModal(false); setEditingCaisse(null); }}
+                  className="flex-1 py-3 bg-gray-100 rounded-xl font-medium"
+                >
+                  Annuler
+                </button>
+                <button
+                  type="submit"
+                  disabled={saving}
+                  className="flex-1 py-3 bg-teal-600 text-white rounded-xl font-medium"
+                >
+                  {saving ? '...' : editingCaisse ? 'Modifier' : 'Créer'}
                 </button>
               </div>
             </form>
@@ -1056,9 +1618,8 @@ function App() {
             </h2>
             
             <form onSubmit={handleCategorySubmit} className="space-y-4">
-              {/* Nom */}
               <div>
-                <label className="text-sm text-gray-500 mb-2 block">Nom de la catégorie</label>
+                <label className="text-sm text-gray-500 mb-2 block">Nom</label>
                 <input
                   type="text"
                   placeholder="Ex: Frais bancaires..."
@@ -1066,11 +1627,9 @@ function App() {
                   onChange={(e) => setCategoryForm({...categoryForm, label: e.target.value})}
                   className="w-full p-4 bg-gray-100 rounded-xl font-medium"
                   required
-                  autoFocus
                 />
               </div>
 
-              {/* Emoji */}
               <div>
                 <label className="text-sm text-gray-500 mb-2 block">Icône</label>
                 <div className="flex flex-wrap gap-2 p-3 bg-gray-100 rounded-xl max-h-32 overflow-y-auto">
@@ -1091,7 +1650,6 @@ function App() {
                 </div>
               </div>
 
-              {/* Aperçu */}
               <div className="p-4 bg-gray-50 rounded-xl flex items-center gap-3">
                 <span className="text-2xl">{categoryForm.icon}</span>
                 <span className="font-medium">{categoryForm.label || 'Aperçu'}</span>
@@ -1126,7 +1684,10 @@ function App() {
           <div className="bg-white w-full max-w-sm rounded-2xl p-6">
             <h2 className="text-lg font-bold text-red-600 mb-4">⚠️ Réinitialiser la caisse</h2>
             
-            {/* Choix du mode */}
+            <p className="text-sm text-gray-600 mb-4">
+              Caisse : <strong>{getCaisseName(currentCaisse)}</strong>
+            </p>
+            
             <div className="space-y-3 mb-4">
               <label className="flex items-center gap-3 p-3 bg-gray-50 rounded-xl cursor-pointer">
                 <input
@@ -1138,7 +1699,7 @@ function App() {
                 />
                 <div>
                   <p className="font-medium">Remettre à zéro</p>
-                  <p className="text-xs text-gray-500">Supprimer toutes les opérations, solde = 0 €</p>
+                  <p className="text-xs text-gray-500">Solde = 0 €</p>
                 </div>
               </label>
               
@@ -1151,16 +1712,15 @@ function App() {
                   className="w-5 h-5 text-teal-600"
                 />
                 <div>
-                  <p className="font-medium">Avec un montant de départ</p>
-                  <p className="text-xs text-gray-500">Supprimer tout et démarrer avec un fond de caisse</p>
+                  <p className="font-medium">Avec montant de départ</p>
+                  <p className="text-xs text-gray-500">Définir un fond de caisse</p>
                 </div>
               </label>
             </div>
 
-            {/* Montant de départ si mode montant */}
             {resetMode === 'montant' && (
               <div className="mb-4">
-                <label className="text-sm text-gray-500 mb-2 block">Montant de départ (€)</label>
+                <label className="text-sm text-gray-500 mb-2 block">Montant (€)</label>
                 <input
                   type="number"
                   step="0.01"
@@ -1173,7 +1733,7 @@ function App() {
             )}
 
             <p className="text-sm text-gray-600 mb-4">
-              Cette action est <strong>irréversible</strong>. Tapez <strong>REINITIALISER</strong> pour confirmer :
+              Tapez <strong>REINITIALISER</strong> pour confirmer :
             </p>
             
             <input
