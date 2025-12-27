@@ -108,17 +108,10 @@ export const remove = (table, id) =>
 // === HELPERS FORMAT DATE ===
 export const formatDate = (dateString) => {
   if (!dateString) return ''
-  // Parser manuellement pour éviter les problèmes de fuseau horaire
-  const parts = dateString.split('T')[0].split('-')
-  if (parts.length === 3) {
-    const [annee, mois, jour] = parts
-    return `${jour}/${mois}/${annee}`
-  }
-  // Fallback si format différent
   const date = new Date(dateString)
-  const jour = date.getUTCDate().toString().padStart(2, '0')
-  const mois = (date.getUTCMonth() + 1).toString().padStart(2, '0')
-  const annee = date.getUTCFullYear()
+  const jour = date.getDate().toString().padStart(2, '0')
+  const mois = (date.getMonth() + 1).toString().padStart(2, '0')
+  const annee = date.getFullYear()
   return `${jour}/${mois}/${annee}`
 }
 
